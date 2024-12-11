@@ -431,7 +431,8 @@ def get_nmea_PUBX04(parsed_data, dict):
     """
     dict['PUBX04.utcWk'] = int(parsed_data.utcWk)
     dict['PUBX04.utcTow'] = float(parsed_data.utcTow)
-    dict['PUBX04.leapSec'] = str(parsed_data.leapSec) # On GNSS start, it is "16D", thus NOT int
+    # On GNSS start, it is "16D", thus NOT int
+    dict['PUBX04.leapSec'] = str(parsed_data.leapSec)
 
     return dict
 
@@ -602,17 +603,22 @@ if __name__ == "__main__":
                 sleep(0.2)
 
                 if (bool(data['TIM_TOS.data_valid']) == True) and data['TIM-TOS.TOW'] != oldTOW:
-                    waitTimeRemaining = int(int(args.WaitTOW) - data['TIM-TOS.TOW'])
-                    
+                    waitTimeRemaining = int(
+                        int(args.WaitTOW) - data['TIM-TOS.TOW'])
+
                     print(
                         f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
-                    print(f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
+                    print(
+                        f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
 
                     oldTOW = data['TIM-TOS.TOW']
 
                 if (bool(data['TIM_TOS.data_valid']) and bool(data['SiT.data_valid']) and bool(data['TIM-SMEAS.data_valid']) and bool(data['PUBX04.data_valid']) == True):
                     if bool(args.WaitTOW) == True:
                         if data['TIM-TOS.TOW'] >= int(args.WaitTOW):
+                            print(
+                                f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
+
                             print_calib_data(data)
                             sys.exit()
 
