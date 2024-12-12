@@ -32,7 +32,7 @@ mbt_SiT5721_lib
 Created on 2024 Dec 07
 
 :author: semuadmin / Martin Boissonneault VE2MRX
-:copyright: SEMU Consulting © 2023 / Martin Boissonneault VE2MRX
+:copyright: SEMU Consulting © 2023 / Martin Boissonneault VE2MRX © 2024
 :license: BSD 3-Clause
 """
 
@@ -94,7 +94,6 @@ class GNSSSkeletonApp:
         self.sendqueue = kwargs.get("sendqueue", None)
         self.idonly = kwargs.get("idonly", True)
         self.filtered = kwargs.get("filtered", False)
-#        self.TOW = kwargs.get("TOW", -1)
         self.enableubx = kwargs.get("enableubx", False)
         self.showhacc = kwargs.get("showhacc", False)
         self.stream = None
@@ -321,8 +320,10 @@ def get_SiT_data(SiTdev, dict):
     """
     Get SiT5721 data from SiTdev
 
-    :param SiT5721 SiTdev: Device to extract data from
+    :param object SiT5721 SiTdev: Device to extract data from
     :param dict dict: name of dict to store the extracted data
+
+    :return dict dict: Modified data dict
     """
 
     # SiT_config
@@ -343,9 +344,12 @@ def get_ubx_TIM_TOS_data(parsed_data, dict):
     """
     Get uBlox TIM-TOS data from GNSS
 
-    :param UBXReader parsed_data: Data to fetch values from
+    :param object UBXReader parsed_data: Data to fetch values from
     :param dict dict: name of dict to store the extracted data
+
+    :return dict dict: Modified data dict
     """
+
     dict['TIM-TOS.gnssId'] = int(parsed_data.gnssId)
     dict['TIM-TOS.gnssId.str'] = str(gnss2str(parsed_data.gnssId))
     dict['TIM-TOS.gnssTimeValid'] = bool(parsed_data.gnssTimeValid)
@@ -384,8 +388,10 @@ def get_ubx_TIM_SMEAS_data(parsed_data, dict):
     """
     Get uBlox TIM-SMEAS data from GNSS
 
-    :param UBXReader parsed_data: data to fetch values from
+    :param object UBXReader parsed_data: data to fetch values from
     :param dict dict: name of dict to store the extracted data
+
+    :return dict dict: Modified data dict
     """
 
     if parsed_data.sourceId_03 == 2:
@@ -426,9 +432,12 @@ def get_nmea_PUBX04(parsed_data, dict):
     """
     Get uBlox NMEA PUBX04 data from GNSS
 
-    :param UBXReader parsed_data: data to fetch values from
+    :param object UBXReader parsed_data: data to fetch values from
     :param dict dict: name of dict to store the extracted data
+
+    :return dict dict: Modified data dict
     """
+
     dict['PUBX04.utcWk'] = int(parsed_data.utcWk)
     dict['PUBX04.utcTow'] = float(parsed_data.utcTow)
     # On GNSS start, it is "16D", thus NOT int
@@ -438,6 +447,16 @@ def get_nmea_PUBX04(parsed_data, dict):
 
 
 def reset_data_valid(dict):
+    """
+    Get Reset data_valid from dict
+    data_valid indicates if the message data exists and is up-to-date for this TOW.
+    Resetting it is usually done when receiving a new TOW to invalidate the old data
+
+    :param dict dict: name of dict to store the modified data
+
+    :return dict dict: Modified data dict
+    """
+
     dict['TIM_TOS.data_valid'] = False
     dict['SiT.data_valid'] = False
     dict['TIM-SMEAS.data_valid'] = False
@@ -447,6 +466,14 @@ def reset_data_valid(dict):
 
 
 def utcStdToStr(utcStandard: int) -> str:
+    """
+    Converts the numeric UTC Standard value to a string
+
+    :param int utcStandard: numeric UTC Standard value
+    :param dict dict: name of dict to store the modified data
+
+    :return str: string representing the UTC Standard
+    """
 
     try:
         return UTCSTANDARD[utcStandard]
@@ -454,7 +481,105 @@ def utcStdToStr(utcStandard: int) -> str:
         return str(utcStandard)
 
 
-def print_calib_data(dict):
+def printToFile_calib_data(dict, file):
+    """
+    Print to file the results of the data collection
+
+    :param dict dict: name of dict to store the modified data
+    :param str file: filename used for output
+    """
+
+    # Create status strings from flags
+    error_status_str = "undefined"
+    stability_status_str = "undefined"
+
+    def error_status(flag):
+        # print(flag)
+        if (flag == 7):
+            error_status = "good"
+        else:
+            error_status = "ERROR"
+        return error_status
+
+    def stability_status(flag):
+        # print(flag)
+        if (flag == 1):
+            error_status = "stabilized"
+        else:
+            error_status = "unstabilized"
+        return error_status
+
+    def flag_valid(flag: bool) -> str:
+        FLAGVALUES = {
+            False: "INVALID",
+            True: "Valid",
+        }
+        try:
+            return FLAGVALUES[flag]
+        except KeyError:
+            return str(flag)
+
+    error_status_str = error_status(
+        dict['SiT.error_status_flag'])
+
+    stability_status_str = stability_status(
+        dict['SiT.stability_flag'])
+
+    with open(file, "a") as f:
+        print(
+            f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}", file=f)
+        print("----------------------------------------", file=f)
+        print(
+            f"TIM-TOS  week, TOW, system  {dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-TOS.gnssId.str']}", file=f)
+        print(
+            f"TIM-TOS  UTC                {str(dict['TIM-TOS.utc.date'])}, {str(dict['TIM-TOS.utc.time'])}, {dict['TIM-TOS.utcStandard.str']}", file=f)
+        print(file=f)
+
+        print(
+            f"TIM-SMEAS  iTOW:                  {dict['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {dict['TIM-SMEAS.source']}, flags(freq: {flag_valid(dict['TIM-SMEAS.freqValid'])}, phase: {flag_valid(dict['TIM-SMEAS.phaseValid'])})", file=f)
+        print(
+            f"TIM-SMEAS  phase offset:      {dict['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {dict['TIM-SMEAS.freqOffset']:=10.3f} ns", file=f)
+        print(
+            f"TIM-SMEAS  phase uncertainty:     {dict['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {dict['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
+        print(file=f)
+
+        print(
+            f"PUBX04  UTC week, TOW,      {dict['PUBX04.utcWk']:4d}, {dict['PUBX04.utcTow']:6.2f}, leapsec: {dict['PUBX04.leapSec']}", file=f)
+        print(file=f)
+
+        print("SiT Uptime                {:8d}s, {}".format(
+            dict['SiT.uptime'],
+            timedelta(seconds=dict['SiT.uptime'])
+        ), file=f, end='\n')
+        print(file=f)
+
+        print(
+            f"SiT Error, Stability status flag      {error_status_str}, {stability_status_str}", file=f, end='\n')
+        print(
+            "SiT Pull Value             {:=+.8g} ppm".format(dict['SiT.pull_value'] / pow(10, -6)), file=f, end='\n')
+        print("SiT Pull Range              {:=.8g} ppm".format(
+            dict['SiT.pull_range'] / pow(10, -6)), file=f, end='\n')
+        print(
+            "SiT Aging compensation     {:=+.8g} part/s".format(dict['SiT.aging_compensation']), file=f, end='\n')
+        print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
+            dict['SiT.max_freq_ramp_rate'] / pow(10, -6)), file=f, end='\n')
+        print(file=f)
+        print("SiT Total offset written   {:=+.8g} ppm".format(
+            dict['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
+        print("----------------------------------------", file=f)
+        print(f"{dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-SMEAS.phaseOffset']:=12.3f}, {dict['SiT.total_offset_written'] / pow(10, -6):=+.8g}", file=f)
+        print(file=f)
+
+
+def printToScreen_calib_data(dict):
+    """
+    Converts the numeric UTC Standard value to a string
+
+    :param int utcStandard: numeric UTC Standard value
+    :param dict dict: name of dict to store the modified data
+
+    :return str: string representing the UTC Standard
+    """
     # Create status strings from flags
     error_status_str = "undefined"
     stability_status_str = "undefined"
@@ -567,6 +692,14 @@ if __name__ == "__main__":
         default=False,
         type=str
     )
+    arp.add_argument(
+        "-O",
+        "--output",
+        required=False,
+        help="File to write to (str)",
+        default='~/SiT-calib_output.txt',
+        type=str
+    )
 
     args = arp.parse_args()
     send_queue = Queue()
@@ -577,8 +710,8 @@ if __name__ == "__main__":
     siTime = SiT5721(bus, address)
 
     data = {
-        'TIM_TOS.data_valid': False,
         'SiT.data_valid': False,
+        'TIM_TOS.data_valid': False,
         'TIM-SMEAS.data_valid': False,
         'PUBX04.data_valid': False,
     }
@@ -602,24 +735,26 @@ if __name__ == "__main__":
             while True:
                 sleep(0.2)
 
-                if (bool(data['TIM_TOS.data_valid']) == True) and data['TIM-TOS.TOW'] != oldTOW:
-                    waitTimeRemaining = int(
-                        int(args.WaitTOW) - data['TIM-TOS.TOW'])
+                if (bool(data['TIM_TOS.data_valid']) == True):
+                    if data['TIM-TOS.TOW'] != oldTOW:
+                        waitTimeRemaining = int(
+                            int(args.WaitTOW) - data['TIM-TOS.TOW'])
 
-                    print(
-                        f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
-                    print(
-                        f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
+                        print(
+                            f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
+                        print(
+                            f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
 
-                    oldTOW = data['TIM-TOS.TOW']
+                        oldTOW = data['TIM-TOS.TOW']
 
                 if (bool(data['TIM_TOS.data_valid']) and bool(data['SiT.data_valid']) and bool(data['TIM-SMEAS.data_valid']) and bool(data['PUBX04.data_valid']) == True):
                     if bool(args.WaitTOW) == True:
-                        if data['TIM-TOS.TOW'] >= int(args.WaitTOW):
-                            print(
-                                f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
+                        if (data['TIM-TOS.TOW'] >= int(args.WaitTOW)) and (data['TIM-TOS.TOW'] < int(args.WaitTOW) + (10 * 60)):
+                            # If WaitTOW is now or in the past 10 minutes
 
-                            print_calib_data(data)
+                            printToFile_calib_data(data, args.output)
+                            printToScreen_calib_data(data)
+
                             sys.exit()
 
                     else:
