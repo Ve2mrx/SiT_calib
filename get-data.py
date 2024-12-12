@@ -69,6 +69,8 @@ import sys
 
 CONNECTED = 1
 
+GPSWEEK_SECONDS = (7 * 24 * 60 * 60)  # 7 days * 24h * 60m * 60s
+
 
 class GNSSSkeletonApp:
     """
@@ -316,7 +318,7 @@ class GNSSSkeletonApp:
         # create event of specified eventtype
 
 
-def get_SiT_data(SiTdev, dict):
+def get_SiT_data(SiTdev: object, dict: dict):
     """
     Get SiT5721 data from SiTdev
 
@@ -340,7 +342,7 @@ def get_SiT_data(SiTdev, dict):
     return dict
 
 
-def get_ubx_TIM_TOS_data(parsed_data, dict):
+def get_ubx_TIM_TOS_data(parsed_data: object, dict: dict):
     """
     Get uBlox TIM-TOS data from GNSS
 
@@ -384,7 +386,7 @@ def get_ubx_TIM_TOS_data(parsed_data, dict):
     return dict
 
 
-def get_ubx_TIM_SMEAS_data(parsed_data, dict):
+def get_ubx_TIM_SMEAS_data(parsed_data: object, dict: dict):
     """
     Get uBlox TIM-SMEAS data from GNSS
 
@@ -428,7 +430,7 @@ def get_ubx_TIM_SMEAS_data(parsed_data, dict):
     return dict
 
 
-def get_nmea_PUBX04(parsed_data, dict):
+def get_nmea_PUBX04(parsed_data: object, dict: dict):
     """
     Get uBlox NMEA PUBX04 data from GNSS
 
@@ -446,7 +448,7 @@ def get_nmea_PUBX04(parsed_data, dict):
     return dict
 
 
-def reset_data_valid(dict):
+def reset_data_valid(dict: dict):
     """
     Get Reset data_valid from dict
     data_valid indicates if the message data exists and is up-to-date for this TOW.
@@ -481,7 +483,7 @@ def utcStdToStr(utcStandard: int) -> str:
         return str(utcStandard)
 
 
-def printToFile_calib_data(dict, file):
+def printToFile_calib_data(dict: dict, file: str):
     """
     Print to file the results of the data collection
 
@@ -571,7 +573,7 @@ def printToFile_calib_data(dict, file):
         print(file=f)
 
 
-def printToScreen_calib_data(dict):
+def printToScreen_calib_data(dict: dict):
     """
     Converts the numeric UTC Standard value to a string
 
@@ -656,6 +658,23 @@ def printToScreen_calib_data(dict):
     print("----------------------------------------")
 
 
+def calcNextTOW(tow: int, interval: int):
+    """
+    Calculates the next TOW (using TIM-TOS)
+
+    :param int tow: current TOW
+    :param int interval: interval in second between TOW
+
+    :return int: calculated next TOW
+    """
+
+    nextTow = tow + interval
+    if nextTow > GPSWEEK_SECONDS:
+        nextTow = nextTow - GPSWEEK_SECONDS
+
+    return nextTow
+
+
 if __name__ == "__main__":
     arp = ArgumentParser(
         formatter_class=ArgumentDefaultsHelpFormatter,
@@ -690,14 +709,22 @@ if __name__ == "__main__":
         required=False,
         help="Wait for a specific TOW, grab and terminate (int)",
         default=False,
-        type=str
+        type=int
+    )
+    arp.add_argument(
+        "-i",
+        "--interval",
+        required=False,
+        help="Interval between data captures (int)",
+        default=False,
+        type=int
     )
     arp.add_argument(
         "-O",
         "--output",
         required=False,
         help="File to write to (str)",
-        default='~/SiT-calib_output.txt',
+        default=False,
         type=str
     )
 
@@ -715,7 +742,9 @@ if __name__ == "__main__":
         'TIM-SMEAS.data_valid': False,
         'PUBX04.data_valid': False,
     }
-    oldTOW = int(0)
+    TOW_old = int(0)
+    TOW_selected = int(args.WaitTOW)
+    TOW_next = TOW_selected
 
     try:
         print("Starting GNSS reader/writer...\n")
@@ -736,26 +765,43 @@ if __name__ == "__main__":
                 sleep(0.2)
 
                 if (bool(data['TIM_TOS.data_valid']) == True):
-                    if data['TIM-TOS.TOW'] != oldTOW:
-                        waitTimeRemaining = int(
-                            int(args.WaitTOW) - data['TIM-TOS.TOW'])
+                    if bool(args.WaitTOW) == True:
+                        if bool(args.interval) == True:
+                            TOW_next = calcNextTOW(
+                                TOW_selected, args.interval)
 
-                        print(
-                            f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}")
-                        print(
-                            f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
+                        if data['TIM-TOS.TOW'] != TOW_old:
+                            waitTimeRemaining = int(
+                                TOW_selected - data['TIM-TOS.TOW'])
 
-                        oldTOW = data['TIM-TOS.TOW']
+                            print(
+                                f"...Waiting for TOW={TOW_selected:6d}, we're at {data['TIM-TOS.TOW']:6d}", end='')
+
+                            if bool(args.interval) == True:
+                                print(f", interval= {args.interval:6d}")
+                            else:
+                                print()
+
+                            print(
+                                f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
+
+                            TOW_old = data['TIM-TOS.TOW']
 
                 if (bool(data['TIM_TOS.data_valid']) and bool(data['SiT.data_valid']) and bool(data['TIM-SMEAS.data_valid']) and bool(data['PUBX04.data_valid']) == True):
+                    # Message data is valid!
                     if bool(args.WaitTOW) == True:
-                        if (data['TIM-TOS.TOW'] >= int(args.WaitTOW)) and (data['TIM-TOS.TOW'] < int(args.WaitTOW) + (10 * 60)):
-                            # If WaitTOW is now or in the past 10 minutes
-
-                            printToFile_calib_data(data, args.output)
+                        if (data['TIM-TOS.TOW'] >= TOW_selected) and (data['TIM-TOS.TOW'] < TOW_selected + (2 * 60)):
+                            # If TOW_selected is now or in the past 2 minutes:
                             printToScreen_calib_data(data)
 
-                            sys.exit()
+                            if bool(args.output) == True:
+                                printToFile_calib_data(data, args.output)
+
+                            if bool(args.interval) == True:
+                                TOW_selected = TOW_next
+
+                            else:
+                                sys.exit()
 
                     else:
                         # print_calib_data(data)
