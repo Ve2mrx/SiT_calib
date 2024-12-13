@@ -529,7 +529,7 @@ def printToFile_calib_data(dict: dict, file: str):
 
     with open(file, "a") as f:
         print(
-            f"...Waiting for TOW={int(args.WaitTOW):6d}, we're at {data['TIM-TOS.TOW']:6d}", file=f)
+            f"...Waiting for TOW={TOW_selected:6d}, we're at {data['TIM-TOS.TOW']:6d}", file=f)
         print("----------------------------------------", file=f)
         print(
             f"TIM-TOS  week, TOW, system  {dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-TOS.gnssId.str']}", file=f)
