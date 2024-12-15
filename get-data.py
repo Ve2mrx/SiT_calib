@@ -176,27 +176,24 @@ class GNSSSkeletonApp:
                         if self.filtered:
                             if parsed_data.identity == "TIM-TOS":
                                 data = reset_data_valid(data)
+                                data = invalidate_SiT_data(data)
 
                                 data = get_ubx_TIM_TOS_data(
                                     parsed_data, data)
-                                data['TIM_TOS.data_valid'] = True
 
                                 data = get_SiT_data(siTime, data)
-                                data['SiT.data_valid'] = True
 
                                 nty = f", week={data['TIM-TOS.week']}, TOW={data['TIM-TOS.TOW']}, gnssId={data['TIM-TOS.gnssId']}"
 
                             elif parsed_data.identity == "TIM-SMEAS":
                                 data = get_ubx_TIM_SMEAS_data(
                                     parsed_data, data)
-                                data['TIM-SMEAS.data_valid'] = True
 
                                 nty = f", iTOW={data['TIM-SMEAS.iTOW']}, source={data['TIM-SMEAS.source']}, freqValid={data['TIM-SMEAS.freqValid']}, phaseValid={data['TIM-SMEAS.phaseValid']}, PhaseOffset={data['TIM-SMEAS.phaseOffset']}, PhaseUnc={data['TIM-SMEAS.phaseUnc']}, freqOffset={data['TIM-SMEAS.freqOffset']}, freqUnc={data['TIM-SMEAS.freqUnc']}"
 
                             elif parsed_data.identity == "PUBX04":
                                 data = get_nmea_PUBX04(
                                     parsed_data, data)
-                                data['PUBX04.data_valid'] = True
 
                                 nty = f", utcWk={data['PUBX04.utcWk']}, utcTow={data['PUBX04.utcTow']}, leapSec={data['PUBX04.leapSec']}"
                             else:
@@ -318,7 +315,7 @@ class GNSSSkeletonApp:
         # create event of specified eventtype
 
 
-def get_SiT_data(SiTdev: object, dict: dict):
+def invalidate_SiT_data(data: dict):
     """
     Get SiT5721 data from SiTdev
 
@@ -328,21 +325,52 @@ def get_SiT_data(SiTdev: object, dict: dict):
     :return dict dict: Modified data dict
     """
 
+    data['SiT.data_valid'] = False
+
     # SiT_config
-    dict['SiT.pull_value'] = float(SiTdev.pull_value)
-    dict['SiT.pull_range'] = float(SiTdev.pull_range)
-    dict['SiT.aging_compensation'] = float(SiTdev.aging_compensation)
-    dict['SiT.max_freq_ramp_rate'] = float(SiTdev.max_freq_ramp_rate)
+    data['SiT.pull_value'] = None
+    data['SiT.pull_range'] = None
+    data['SiT.aging_compensation'] = None
+    data['SiT.max_freq_ramp_rate'] = None
     # SiT_dynamic
-    dict['SiT.uptime'] = int(SiTdev.uptime_uint)
-    dict['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
-    dict['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
-    dict['SiT.stability_flag'] = int(SiTdev.stability_flag_uint)
+    data['SiT.uptime'] = None
+    data['SiT.total_offset_written'] = None
+    data['SiT.error_status_flag'] = None
+    data['SiT.stability_flag'] = None
 
-    return dict
+    return data
 
 
-def get_ubx_TIM_TOS_data(parsed_data: object, dict: dict):
+def get_SiT_data(SiTdev: object, data: dict):
+    """
+    Get SiT5721 data from SiTdev
+
+    :param object SiT5721 SiTdev: Device to extract data from
+    :param dict data: name of dict to store the extracted data
+
+    :return dict data: Modified data dict
+    """
+
+    SiTdev.read_SiT_config()
+    SiTdev.read_SiT_dynamic()
+
+    # SiT_config
+    data['SiT.pull_value'] = float(SiTdev.pull_value)
+    data['SiT.pull_range'] = float(SiTdev.pull_range)
+    data['SiT.aging_compensation'] = float(SiTdev.aging_compensation)
+    data['SiT.max_freq_ramp_rate'] = float(SiTdev.max_freq_ramp_rate)
+    # SiT_dynamic
+    data['SiT.uptime'] = int(SiTdev.uptime_uint)
+    data['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
+    data['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
+    data['SiT.stability_flag'] = int(SiTdev.stability_flag_uint)
+
+    data['SiT.data_valid'] = True
+
+    return data
+
+
+def get_ubx_TIM_TOS_data(parsed_data: object, data: dict):
     """
     Get uBlox TIM-TOS data from GNSS
 
@@ -352,30 +380,30 @@ def get_ubx_TIM_TOS_data(parsed_data: object, dict: dict):
     :return dict dict: Modified data dict
     """
 
-    dict['TIM-TOS.gnssId'] = int(parsed_data.gnssId)
-    dict['TIM-TOS.gnssId.str'] = str(gnss2str(parsed_data.gnssId))
-    dict['TIM-TOS.gnssTimeValid'] = bool(parsed_data.gnssTimeValid)
-    dict['TIM-TOS.UTCTimeValid'] = bool(parsed_data.UTCTimeValid)
-    dict['TIM-TOS.year'] = int(parsed_data.year)
-    dict['TIM-TOS.month'] = int(parsed_data.month)
-    dict['TIM-TOS.day'] = int(parsed_data.day)
-    dict['TIM-TOS.hour'] = int(parsed_data.hour)
-    dict['TIM-TOS.minute'] = int(parsed_data.minute)
-    dict['TIM-TOS.second'] = int(parsed_data.second)
-    dict['TIM-TOS.utcStandard'] = int(parsed_data.utcStandard)
+    data['TIM-TOS.gnssId'] = int(parsed_data.gnssId)
+    data['TIM-TOS.gnssId.str'] = str(gnss2str(parsed_data.gnssId))
+    data['TIM-TOS.gnssTimeValid'] = bool(parsed_data.gnssTimeValid)
+    data['TIM-TOS.UTCTimeValid'] = bool(parsed_data.UTCTimeValid)
+    data['TIM-TOS.year'] = int(parsed_data.year)
+    data['TIM-TOS.month'] = int(parsed_data.month)
+    data['TIM-TOS.day'] = int(parsed_data.day)
+    data['TIM-TOS.hour'] = int(parsed_data.hour)
+    data['TIM-TOS.minute'] = int(parsed_data.minute)
+    data['TIM-TOS.second'] = int(parsed_data.second)
+    data['TIM-TOS.utcStandard'] = int(parsed_data.utcStandard)
 
-    dict['TIM-TOS.utcStandard.str'] = utcStdToStr(
+    data['TIM-TOS.utcStandard.str'] = utcStdToStr(
         int(parsed_data.utcStandard))
 
-    dict['TIM-TOS.week'] = int(parsed_data.week)
-    dict['TIM-TOS.TOW'] = int(parsed_data.TOW)
+    data['TIM-TOS.week'] = int(parsed_data.week)
+    data['TIM-TOS.TOW'] = int(parsed_data.TOW)
 
-    dict['TIM-TOS.utc.date'] = date(
+    data['TIM-TOS.utc.date'] = date(
         parsed_data.year,
         parsed_data.month,
         parsed_data.day
     )
-    dict['TIM-TOS.utc.time'] = time(
+    data['TIM-TOS.utc.time'] = time(
         parsed_data.hour,
         parsed_data.minute,
         parsed_data.second,
@@ -383,10 +411,12 @@ def get_ubx_TIM_TOS_data(parsed_data: object, dict: dict):
         tzinfo=timezone.utc
     )
 
-    return dict
+    data['TIM_TOS.data_valid'] = True
+
+    return data
 
 
-def get_ubx_TIM_SMEAS_data(parsed_data: object, dict: dict):
+def get_ubx_TIM_SMEAS_data(parsed_data: object, data: dict):
     """
     Get uBlox TIM-SMEAS data from GNSS
 
@@ -407,30 +437,34 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, dict: dict):
             + parsed_data.phaseUncFrac_03
         )
 
-        dict['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
-        dict['TIM-SMEAS.source'] = str("EXTINT0")
-        dict['TIM-SMEAS.freqValid'] = bool(parsed_data.freqValid_03)
-        dict['TIM-SMEAS.phaseValid'] = bool(parsed_data.phaseValid_03)
-        dict['TIM-SMEAS.phaseOffset'] = float(phaseOffset_03_float)
-        dict['TIM-SMEAS.phaseUnc'] = float(phaseUnc_03_float)
-        dict['TIM-SMEAS.freqOffset'] = float(parsed_data.freqOffset_03)
-        dict['TIM-SMEAS.freqUnc'] = float(parsed_data.freqUnc_03)
+        data['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
+        data['TIM-SMEAS.source'] = str("EXTINT0")
+        data['TIM-SMEAS.freqValid'] = bool(parsed_data.freqValid_03)
+        data['TIM-SMEAS.phaseValid'] = bool(parsed_data.phaseValid_03)
+        data['TIM-SMEAS.phaseOffset'] = float(phaseOffset_03_float)
+        data['TIM-SMEAS.phaseUnc'] = float(phaseUnc_03_float)
+        data['TIM-SMEAS.freqOffset'] = float(parsed_data.freqOffset_03)
+        data['TIM-SMEAS.freqUnc'] = float(parsed_data.freqUnc_03)
+
+        data['TIM-SMEAS.data_valid'] = True
 
     else:
         # If the sourceId_03 is NOT "EXTINT0", clear
-        dict['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
-        dict['TIM-SMEAS.source'] = "other"
-        dict['TIM-SMEAS.freqValid'] = None
-        dict['TIM-SMEAS.phaseValid'] = None
-        dict['TIM-SMEAS.phaseOffset'] = None
-        dict['TIM-SMEAS.phaseUnc'] = None
-        dict['TIM-SMEAS.freqOffset'] = None
-        dict['TIM-SMEAS.freqUnc'] = None
+        data['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
+        data['TIM-SMEAS.source'] = "other"
+        data['TIM-SMEAS.freqValid'] = None
+        data['TIM-SMEAS.phaseValid'] = None
+        data['TIM-SMEAS.phaseOffset'] = None
+        data['TIM-SMEAS.phaseUnc'] = None
+        data['TIM-SMEAS.freqOffset'] = None
+        data['TIM-SMEAS.freqUnc'] = None
 
-    return dict
+        data['TIM-SMEAS.data_valid'] = False
+
+    return data
 
 
-def get_nmea_PUBX04(parsed_data: object, dict: dict):
+def get_nmea_PUBX04(parsed_data: object, data: dict):
     """
     Get uBlox NMEA PUBX04 data from GNSS
 
@@ -440,15 +474,17 @@ def get_nmea_PUBX04(parsed_data: object, dict: dict):
     :return dict dict: Modified data dict
     """
 
-    dict['PUBX04.utcWk'] = int(parsed_data.utcWk)
-    dict['PUBX04.utcTow'] = float(parsed_data.utcTow)
+    data['PUBX04.utcWk'] = int(parsed_data.utcWk)
+    data['PUBX04.utcTow'] = float(parsed_data.utcTow)
     # On GNSS start, it is "16D", thus NOT int
-    dict['PUBX04.leapSec'] = str(parsed_data.leapSec)
+    data['PUBX04.leapSec'] = str(parsed_data.leapSec)
 
-    return dict
+    data['PUBX04.data_valid'] = True
+
+    return data
 
 
-def reset_data_valid(dict: dict):
+def reset_data_valid(data: dict):
     """
     Get Reset data_valid from dict
     data_valid indicates if the message data exists and is up-to-date for this TOW.
@@ -459,12 +495,12 @@ def reset_data_valid(dict: dict):
     :return dict dict: Modified data dict
     """
 
-    dict['TIM_TOS.data_valid'] = False
-    dict['SiT.data_valid'] = False
-    dict['TIM-SMEAS.data_valid'] = False
-    dict['PUBX04.data_valid'] = False
+    data['TIM_TOS.data_valid'] = False
+    data['SiT.data_valid'] = False
+    data['TIM-SMEAS.data_valid'] = False
+    data['PUBX04.data_valid'] = False
 
-    return dict
+    return data
 
 
 def utcStdToStr(utcStandard: int) -> str:
@@ -483,7 +519,7 @@ def utcStdToStr(utcStandard: int) -> str:
         return str(utcStandard)
 
 
-def printToFile_calib_data(dict: dict, file: str):
+def printToFile_calib_data(data: dict, file: str):
     """
     Print to file the results of the data collection
 
@@ -522,58 +558,58 @@ def printToFile_calib_data(dict: dict, file: str):
             return str(flag)
 
     error_status_str = error_status(
-        dict['SiT.error_status_flag'])
+        data['SiT.error_status_flag'])
 
     stability_status_str = stability_status(
-        dict['SiT.stability_flag'])
+        data['SiT.stability_flag'])
 
     with open(file, "a") as f:
         print(
             f"...Waiting for TOW={TOW_selected:6d}, we're at {data['TIM-TOS.TOW']:6d}", file=f)
         print("----------------------------------------", file=f)
         print(
-            f"TIM-TOS  week, TOW, system  {dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-TOS.gnssId.str']}", file=f)
+            f"TIM-TOS  week, TOW, system  {data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-TOS.gnssId.str']}", file=f)
         print(
-            f"TIM-TOS  UTC                {str(dict['TIM-TOS.utc.date'])}, {str(dict['TIM-TOS.utc.time'])}, {dict['TIM-TOS.utcStandard.str']}", file=f)
+            f"TIM-TOS  UTC                {str(data['TIM-TOS.utc.date'])}, {str(data['TIM-TOS.utc.time'])}, {data['TIM-TOS.utcStandard.str']}", file=f)
         print(file=f)
 
         print(
-            f"TIM-SMEAS  iTOW:                  {dict['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {dict['TIM-SMEAS.source']}, flags(freq: {flag_valid(dict['TIM-SMEAS.freqValid'])}, phase: {flag_valid(dict['TIM-SMEAS.phaseValid'])})", file=f)
+            f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})", file=f)
         print(
-            f"TIM-SMEAS  phase offset:      {dict['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {dict['TIM-SMEAS.freqOffset']:=10.3f} ns", file=f)
+            f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ns", file=f)
         print(
-            f"TIM-SMEAS  phase uncertainty:     {dict['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {dict['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
+            f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
         print(file=f)
 
         print(
-            f"PUBX04  UTC week, TOW,      {dict['PUBX04.utcWk']:4d}, {dict['PUBX04.utcTow']:6.2f}, leapsec: {dict['PUBX04.leapSec']}", file=f)
+            f"PUBX04  UTC week, TOW,      {data['PUBX04.utcWk']:4d}, {data['PUBX04.utcTow']:6.2f}, leapsec: {data['PUBX04.leapSec']}", file=f)
         print(file=f)
 
         print("SiT Uptime                {:8d}s, {}".format(
-            dict['SiT.uptime'],
-            timedelta(seconds=dict['SiT.uptime'])
+            data['SiT.uptime'],
+            timedelta(seconds=data['SiT.uptime'])
         ), file=f, end='\n')
         print(file=f)
 
         print(
             f"SiT Error, Stability status flag      {error_status_str}, {stability_status_str}", file=f, end='\n')
         print(
-            "SiT Pull Value             {:=+.8g} ppm".format(dict['SiT.pull_value'] / pow(10, -6)), file=f, end='\n')
+            "SiT Pull Value             {:=+.8g} ppm".format(data['SiT.pull_value'] / pow(10, -6)), file=f, end='\n')
         print("SiT Pull Range              {:=.8g} ppm".format(
-            dict['SiT.pull_range'] / pow(10, -6)), file=f, end='\n')
+            data['SiT.pull_range'] / pow(10, -6)), file=f, end='\n')
         print(
-            "SiT Aging compensation     {:=+.8g} part/s".format(dict['SiT.aging_compensation']), file=f, end='\n')
+            "SiT Aging compensation     {:=+.8g} part/s".format(data['SiT.aging_compensation']), file=f, end='\n')
         print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
-            dict['SiT.max_freq_ramp_rate'] / pow(10, -6)), file=f, end='\n')
+            data['SiT.max_freq_ramp_rate'] / pow(10, -6)), file=f, end='\n')
         print(file=f)
         print("SiT Total offset written   {:=+.8g} ppm".format(
-            dict['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
+            data['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
         print("----------------------------------------", file=f)
-        print(f"{dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-SMEAS.phaseOffset']:=12.3f}, {dict['SiT.total_offset_written'] / pow(10, -6):=+.8g}", file=f)
+        print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+3.10g}", file=f)
         print(file=f)
 
 
-def printToScreen_calib_data(dict: dict):
+def printToScreen_calib_data(data: dict):
     """
     Converts the numeric UTC Standard value to a string
 
@@ -613,48 +649,48 @@ def printToScreen_calib_data(dict: dict):
             return str(flag)
 
     error_status_str = error_status(
-        dict['SiT.error_status_flag'])
+        data['SiT.error_status_flag'])
     stability_status_str = stability_status(
-        dict['SiT.stability_flag'])
+        data['SiT.stability_flag'])
 
     print("----------------------------------------")
     print(
-        f"TIM-TOS  week, TOW, system  {dict['TIM-TOS.week']:4d}, {dict['TIM-TOS.TOW']:6d}, {dict['TIM-TOS.gnssId.str']}")
+        f"TIM-TOS  week, TOW, system  {data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-TOS.gnssId.str']}")
     print(
-        f"TIM-TOS  UTC                {str(dict['TIM-TOS.utc.date'])}, {str(dict['TIM-TOS.utc.time'])}, {dict['TIM-TOS.utcStandard.str']}")
+        f"TIM-TOS  UTC                {str(data['TIM-TOS.utc.date'])}, {str(data['TIM-TOS.utc.time'])}, {data['TIM-TOS.utcStandard.str']}")
     print()
 
     print(
-        f"TIM-SMEAS  iTOW:                  {dict['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {dict['TIM-SMEAS.source']}, flags(freq: {flag_valid(dict['TIM-SMEAS.freqValid'])}, phase: {flag_valid(dict['TIM-SMEAS.phaseValid'])})")
+        f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})")
     print(
-        f"TIM-SMEAS  phase offset:      {dict['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {dict['TIM-SMEAS.freqOffset']:=10.3f} ns")
+        f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ns")
     print(
-        f"TIM-SMEAS  phase uncertainty:     {dict['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {dict['TIM-SMEAS.freqUnc']:=10.3f} ns")
+        f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns")
     print()
 
     print(
-        f"PUBX04  UTC week, TOW,      {dict['PUBX04.utcWk']:4d}, {dict['PUBX04.utcTow']:6.2f}, leapsec: {dict['PUBX04.leapSec']}")
+        f"PUBX04  UTC week, TOW,      {data['PUBX04.utcWk']:4d}, {data['PUBX04.utcTow']:6.2f}, leapsec: {data['PUBX04.leapSec']}")
     print()
 
     print("SiT Uptime                {:8d}s, {}".format(
-        dict['SiT.uptime'],
-        timedelta(seconds=dict['SiT.uptime'])
+        data['SiT.uptime'],
+        timedelta(seconds=data['SiT.uptime'])
     ), end='\n')
     print()
 
     print(
         f"SiT Error, Stability status flag      {error_status_str}, {stability_status_str}", end='\n')
     print(
-        "SiT Pull Value             {:=+.8g} ppm".format(dict['SiT.pull_value'] / pow(10, -6)), end='\n')
+        "SiT Pull Value             {:=+.8g} ppm".format(data['SiT.pull_value'] / pow(10, -6)), end='\n')
     print("SiT Pull Range              {:=.8g} ppm".format(
-        dict['SiT.pull_range'] / pow(10, -6)), end='\n')
+        data['SiT.pull_range'] / pow(10, -6)), end='\n')
     print(
-        "SiT Aging compensation     {:=+.8g} part/s".format(dict['SiT.aging_compensation']), end='\n')
+        "SiT Aging compensation     {:=+.8g} part/s".format(data['SiT.aging_compensation']), end='\n')
     print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
-        dict['SiT.max_freq_ramp_rate'] / pow(10, -6)), end='\n')
+        data['SiT.max_freq_ramp_rate'] / pow(10, -6)), end='\n')
     print()
-    print("SiT Total offset written   {:=+.8g} ppm".format(
-        dict['SiT.total_offset_written'] / pow(10, -6)), end='\n')
+    print("SiT Total offset written   {:=+3.10g} ppm".format(
+        data['SiT.total_offset_written'] / pow(10, -6)), end='\n')
     print("----------------------------------------")
 
 

@@ -6,7 +6,7 @@ import datetime
 import struct
 # import time
 
-# import smbus
+import smbus
 
 
 class SiT5721:
