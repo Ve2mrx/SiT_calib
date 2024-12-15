@@ -176,27 +176,24 @@ class GNSSSkeletonApp:
                         if self.filtered:
                             if parsed_data.identity == "TIM-TOS":
                                 data = reset_data_valid(data)
+                                data = invalidate_SiT_data(data)
 
                                 data = get_ubx_TIM_TOS_data(
                                     parsed_data, data)
-                                data['TIM_TOS.data_valid'] = True
 
                                 data = get_SiT_data(siTime, data)
-                                data['SiT.data_valid'] = True
 
                                 nty = f", week={data['TIM-TOS.week']}, TOW={data['TIM-TOS.TOW']}, gnssId={data['TIM-TOS.gnssId']}"
 
                             elif parsed_data.identity == "TIM-SMEAS":
                                 data = get_ubx_TIM_SMEAS_data(
                                     parsed_data, data)
-                                data['TIM-SMEAS.data_valid'] = True
 
                                 nty = f", iTOW={data['TIM-SMEAS.iTOW']}, source={data['TIM-SMEAS.source']}, freqValid={data['TIM-SMEAS.freqValid']}, phaseValid={data['TIM-SMEAS.phaseValid']}, PhaseOffset={data['TIM-SMEAS.phaseOffset']}, PhaseUnc={data['TIM-SMEAS.phaseUnc']}, freqOffset={data['TIM-SMEAS.freqOffset']}, freqUnc={data['TIM-SMEAS.freqUnc']}"
 
                             elif parsed_data.identity == "PUBX04":
                                 data = get_nmea_PUBX04(
                                     parsed_data, data)
-                                data['PUBX04.data_valid'] = True
 
                                 nty = f", utcWk={data['PUBX04.utcWk']}, utcTow={data['PUBX04.utcTow']}, leapSec={data['PUBX04.leapSec']}"
                             else:
@@ -318,6 +315,32 @@ class GNSSSkeletonApp:
         # create event of specified eventtype
 
 
+def invalidate_SiT_data(dict: dict):
+    """
+    Get SiT5721 data from SiTdev
+
+    :param object SiT5721 SiTdev: Device to extract data from
+    :param dict dict: name of dict to store the extracted data
+
+    :return dict dict: Modified data dict
+    """
+
+    dict['SiT.data_valid'] = False
+
+    # SiT_config
+    dict['SiT.pull_value'] = None
+    dict['SiT.pull_range'] = None
+    dict['SiT.aging_compensation'] = None
+    dict['SiT.max_freq_ramp_rate'] = None
+    # SiT_dynamic
+    dict['SiT.uptime'] = None
+    dict['SiT.total_offset_written'] = None
+    dict['SiT.error_status_flag'] = None
+    dict['SiT.stability_flag'] = None
+
+    return dict
+
+
 def get_SiT_data(SiTdev: object, dict: dict):
     """
     Get SiT5721 data from SiTdev
@@ -338,6 +361,8 @@ def get_SiT_data(SiTdev: object, dict: dict):
     dict['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
     dict['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
     dict['SiT.stability_flag'] = int(SiTdev.stability_flag_uint)
+
+    dict['SiT.data_valid'] = True
 
     return dict
 
@@ -383,6 +408,8 @@ def get_ubx_TIM_TOS_data(parsed_data: object, dict: dict):
         tzinfo=timezone.utc
     )
 
+    dict['TIM_TOS.data_valid'] = True
+
     return dict
 
 
@@ -416,6 +443,8 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, dict: dict):
         dict['TIM-SMEAS.freqOffset'] = float(parsed_data.freqOffset_03)
         dict['TIM-SMEAS.freqUnc'] = float(parsed_data.freqUnc_03)
 
+        dict['TIM-SMEAS.data_valid'] = True
+
     else:
         # If the sourceId_03 is NOT "EXTINT0", clear
         dict['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
@@ -426,6 +455,8 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, dict: dict):
         dict['TIM-SMEAS.phaseUnc'] = None
         dict['TIM-SMEAS.freqOffset'] = None
         dict['TIM-SMEAS.freqUnc'] = None
+
+        dict['TIM-SMEAS.data_valid'] = False
 
     return dict
 
@@ -444,6 +475,8 @@ def get_nmea_PUBX04(parsed_data: object, dict: dict):
     dict['PUBX04.utcTow'] = float(parsed_data.utcTow)
     # On GNSS start, it is "16D", thus NOT int
     dict['PUBX04.leapSec'] = str(parsed_data.leapSec)
+
+    dict['PUBX04.data_valid'] = True
 
     return dict
 
