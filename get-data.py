@@ -182,8 +182,6 @@ class GNSSSkeletonApp:
                                     parsed_data, data)
 
                                 data = get_SiT_data(siTime, data)
-                                print(
-                                    f"Uptime= {data['SiT.uptime']}, Total offset written= {data['SiT.total_offset_written']}")
 
                                 nty = f", week={data['TIM-TOS.week']}, TOW={data['TIM-TOS.TOW']}, gnssId={data['TIM-TOS.gnssId']}"
 
@@ -366,9 +364,6 @@ def get_SiT_data(SiTdev: object, data: dict):
     data['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
     data['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
     data['SiT.stability_flag'] = int(SiTdev.stability_flag_uint)
-
-    print(
-        f"Uptime= {data['SiT.uptime']}, Total offset written= {data['SiT.total_offset_written']}")
 
     data['SiT.data_valid'] = True
 
@@ -610,7 +605,7 @@ def printToFile_calib_data(data: dict, file: str):
         print("SiT Total offset written   {:=+.8g} ppm".format(
             data['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
         print("----------------------------------------", file=f)
-        print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+.8g}", file=f)
+        print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+3.10g}", file=f)
         print(file=f)
 
 
@@ -694,7 +689,7 @@ def printToScreen_calib_data(data: dict):
     print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
         data['SiT.max_freq_ramp_rate'] / pow(10, -6)), end='\n')
     print()
-    print("SiT Total offset written   {:=+.8g} ppm".format(
+    print("SiT Total offset written   {:=+3.10g} ppm".format(
         data['SiT.total_offset_written'] / pow(10, -6)), end='\n')
     print("----------------------------------------")
 
@@ -825,9 +820,6 @@ if __name__ == "__main__":
 
                             print(
                                 f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
-
-                            print(
-                                f"Uptime= {data['SiT.uptime']}, Total offset written= {data['SiT.total_offset_written']}")
 
                             TOW_old = data['TIM-TOS.TOW']
 
