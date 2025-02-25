@@ -578,7 +578,7 @@ def printToFile_calib_data(data: dict, file: str):
         print(
             f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ns", file=f)
         print(
-            f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
+            f"TIM-SMEAS  phase uncertainty:      {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
         print(file=f)
 
         print(
@@ -605,7 +605,7 @@ def printToFile_calib_data(data: dict, file: str):
         print("SiT Total offset written   {:=+.8g} ppm".format(
             data['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
         print("----------------------------------------", file=f)
-        print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+3.10g}", file=f)
+        print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+3.10g}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])}), SiT status({error_status_str}, {stability_status_str})", file=f)
         print(file=f)
 
 
