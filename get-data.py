@@ -62,7 +62,9 @@ from pyubx2 import (
 from mbt_SiT5721_lib import SiT5721
 import smbus
 
-from datetime import timedelta, time, date, timezone
+from datetime import datetime, timedelta, time, date, timezone
+import json
+import os
 import sys
 
 CONNECTED = 1
@@ -700,6 +702,46 @@ def calcNextTOW(tow: int, interval: int):
     return (tow + interval) % GPSWEEK_SECONDS
 
 
+def save_tow_state(statefile: str, tow_selected: int, interval) -> None:
+    """
+    Persist the current TOW_selected so a restart can resume without
+    re-entering it. Written atomically so a power loss mid-write can't
+    corrupt the state file.
+
+    :param str statefile: path to the state file
+    :param int tow_selected: TOW currently being waited for
+    :param interval: capture interval in effect (int or False)
+    """
+
+    tmp = f"{statefile}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({
+            "TOW_selected": tow_selected,
+            "interval": interval,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, statefile)
+
+
+def load_tow_state(statefile: str):
+    """
+    Load a previously saved TOW_selected.
+
+    :param str statefile: path to the state file
+
+    :return int | None: the saved TOW_selected, or None if unavailable/invalid
+    """
+
+    try:
+        with open(statefile) as f:
+            state = json.load(f)
+        return valid_tow(str(state["TOW_selected"]))
+    except (OSError, ValueError, KeyError, ArgumentTypeError):
+        return None
+
+
 def str2bool(v: str) -> bool:
     """
     Converts a command-line string argument to a bool.
@@ -780,6 +822,14 @@ if __name__ == "__main__":
         default=False,
         type=str
     )
+    arp.add_argument(
+        "-S",
+        "--statefile",
+        required=False,
+        help="File to persist/restore the current TOW_selected across restarts (str)",
+        default=False,
+        type=str
+    )
 
     args = arp.parse_args()
     send_queue = Queue()
@@ -798,6 +848,14 @@ if __name__ == "__main__":
     data_lock = Lock()
     TOW_old = int(0)
     TOW_selected = int(args.WaitTOW)
+
+    if args.WaitTOW is False and args.statefile:
+        resumed_tow = load_tow_state(args.statefile)
+        if resumed_tow is not None:
+            TOW_selected = resumed_tow
+            args.WaitTOW = resumed_tow
+            print(f"Resumed TOW_selected={TOW_selected} from {args.statefile}")
+
     TOW_next = TOW_selected
 
     try:
@@ -862,6 +920,10 @@ if __name__ == "__main__":
 
                             if args.interval is not False:
                                 TOW_selected = TOW_next
+
+                                if args.statefile:
+                                    save_tow_state(
+                                        args.statefile, TOW_selected, args.interval)
 
                             else:
                                 sys.exit()
