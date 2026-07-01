@@ -40,7 +40,7 @@ Created on 2024 Dec 07
 
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import sleep
 
 from pynmeagps import NMEAMessageError, NMEAParseError
@@ -163,6 +163,7 @@ class GNSSSkeletonApp:
 
         global data
         global siTime
+        global data_lock
 
         ubr = UBXReader(stream, protfilter=(NMEA_PROTOCOL | UBX_PROTOCOL))
         while not stopevent.is_set():
@@ -174,30 +175,31 @@ class GNSSSkeletonApp:
                         self._extract_coordinates(parsed_data)
 
                         if self.filtered:
-                            if parsed_data.identity == "TIM-TOS":
-                                data = reset_data_valid(data)
-                                data = invalidate_SiT_data(data)
+                            with data_lock:
+                                if parsed_data.identity == "TIM-TOS":
+                                    data = reset_data_valid(data)
+                                    data = invalidate_SiT_data(data)
 
-                                data = get_ubx_TIM_TOS_data(
-                                    parsed_data, data)
+                                    data = get_ubx_TIM_TOS_data(
+                                        parsed_data, data)
 
-                                data = get_SiT_data(siTime, data)
+                                    data = get_SiT_data(siTime, data)
 
-                                nty = f", week={data['TIM-TOS.week']}, TOW={data['TIM-TOS.TOW']}, gnssId={data['TIM-TOS.gnssId']}"
+                                    nty = f", week={data['TIM-TOS.week']}, TOW={data['TIM-TOS.TOW']}, gnssId={data['TIM-TOS.gnssId']}"
 
-                            elif parsed_data.identity == "TIM-SMEAS":
-                                data = get_ubx_TIM_SMEAS_data(
-                                    parsed_data, data)
+                                elif parsed_data.identity == "TIM-SMEAS":
+                                    data = get_ubx_TIM_SMEAS_data(
+                                        parsed_data, data)
 
-                                nty = f", iTOW={data['TIM-SMEAS.iTOW']}, source={data['TIM-SMEAS.source']}, freqValid={data['TIM-SMEAS.freqValid']}, phaseValid={data['TIM-SMEAS.phaseValid']}, PhaseOffset={data['TIM-SMEAS.phaseOffset']}, PhaseUnc={data['TIM-SMEAS.phaseUnc']}, freqOffset={data['TIM-SMEAS.freqOffset']}, freqUnc={data['TIM-SMEAS.freqUnc']}"
+                                    nty = f", iTOW={data['TIM-SMEAS.iTOW']}, source={data['TIM-SMEAS.source']}, freqValid={data['TIM-SMEAS.freqValid']}, phaseValid={data['TIM-SMEAS.phaseValid']}, PhaseOffset={data['TIM-SMEAS.phaseOffset']}, PhaseUnc={data['TIM-SMEAS.phaseUnc']}, freqOffset={data['TIM-SMEAS.freqOffset']}, freqUnc={data['TIM-SMEAS.freqUnc']}"
 
-                            elif parsed_data.identity == "PUBX04":
-                                data = get_nmea_PUBX04(
-                                    parsed_data, data)
+                                elif parsed_data.identity == "PUBX04":
+                                    data = get_nmea_PUBX04(
+                                        parsed_data, data)
 
-                                nty = f", utcWk={data['PUBX04.utcWk']}, utcTow={data['PUBX04.utcTow']}, leapSec={data['PUBX04.leapSec']}"
-                            else:
-                                continue
+                                    nty = f", utcWk={data['PUBX04.utcWk']}, utcTow={data['PUBX04.utcTow']}, leapSec={data['PUBX04.leapSec']}"
+                                else:
+                                    continue
 
                             print(f"GNSS>> {parsed_data.identity}{nty}")
 
@@ -206,6 +208,9 @@ class GNSSSkeletonApp:
 
                         else:
                             print(parsed_data)
+
+                else:
+                    sleep(0.01)
 
                 # send any queued output data to receiver
                 self._send_data(ubr.datastream, sendqueue)
@@ -220,6 +225,11 @@ class GNSSSkeletonApp:
             ) as err:
                 print(f"Error parsing data stream {err}")
                 continue
+
+            except Exception as err:
+                print(f"Fatal error in GNSS read loop, stopping reader: {err}")
+                stopevent.set()
+                break
 
     def _extract_coordinates(self, parsed_data: object):
         """
@@ -778,6 +788,7 @@ if __name__ == "__main__":
         'TIM-SMEAS.data_valid': False,
         'PUBX04.data_valid': False,
     }
+    data_lock = Lock()
     TOW_old = int(0)
     TOW_selected = int(args.WaitTOW)
     TOW_next = TOW_selected
@@ -800,20 +811,27 @@ if __name__ == "__main__":
             while True:
                 sleep(0.2)
 
-                if (bool(data['TIM_TOS.data_valid']) == True):
-                    if bool(args.WaitTOW) == True:
-                        if bool(args.interval) == True:
+                if stop_event.is_set():
+                    print("Reader thread stopped unexpectedly, exiting.")
+                    sys.exit(1)
+
+                with data_lock:
+                    snapshot = dict(data)
+
+                if (bool(snapshot['TIM_TOS.data_valid']) == True):
+                    if args.WaitTOW is not False:
+                        if args.interval is not False:
                             TOW_next = calcNextTOW(
                                 TOW_selected, args.interval)
 
-                        if data['TIM-TOS.TOW'] != TOW_old:
+                        if snapshot['TIM-TOS.TOW'] != TOW_old:
                             waitTimeRemaining = int(
-                                TOW_selected - data['TIM-TOS.TOW'])
+                                TOW_selected - snapshot['TIM-TOS.TOW'])
 
                             print(
-                                f"...Waiting for TOW={TOW_selected:6d}, we're at {data['TIM-TOS.TOW']:6d}", end='')
+                                f"...Waiting for TOW={TOW_selected:6d}, we're at {snapshot['TIM-TOS.TOW']:6d}", end='')
 
-                            if bool(args.interval) == True:
+                            if args.interval is not False:
                                 print(f", interval= {args.interval:6d}")
                             else:
                                 print()
@@ -821,19 +839,19 @@ if __name__ == "__main__":
                             print(
                                 f"...Time to go: {waitTimeRemaining} s or  {timedelta(seconds=waitTimeRemaining)}")
 
-                            TOW_old = data['TIM-TOS.TOW']
+                            TOW_old = snapshot['TIM-TOS.TOW']
 
-                if (bool(data['TIM_TOS.data_valid']) and bool(data['SiT.data_valid']) and bool(data['TIM-SMEAS.data_valid']) and bool(data['PUBX04.data_valid']) == True):
+                if (bool(snapshot['TIM_TOS.data_valid']) and bool(snapshot['SiT.data_valid']) and bool(snapshot['TIM-SMEAS.data_valid']) and bool(snapshot['PUBX04.data_valid']) == True):
                     # Message data is valid!
-                    if bool(args.WaitTOW) == True:
-                        if (data['TIM-TOS.TOW'] >= TOW_selected) and (data['TIM-TOS.TOW'] < TOW_selected + (2 * 60)):
+                    if args.WaitTOW is not False:
+                        if (snapshot['TIM-TOS.TOW'] >= TOW_selected) and (snapshot['TIM-TOS.TOW'] < TOW_selected + (2 * 60)):
                             # If TOW_selected is now or in the past 2 minutes:
-                            printToScreen_calib_data(data)
+                            printToScreen_calib_data(snapshot)
 
                             if bool(args.output) == True:
-                                printToFile_calib_data(data, args.output)
+                                printToFile_calib_data(snapshot, args.output)
 
-                            if bool(args.interval) == True:
+                            if args.interval is not False:
                                 TOW_selected = TOW_next
 
                             else:
