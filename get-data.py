@@ -38,7 +38,7 @@ Created on 2024 Dec 07
 
 # pylint: disable=invalid-name, too-many-instance-attributes
 
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser, ArgumentTypeError
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from time import sleep
@@ -204,7 +204,7 @@ class GNSSSkeletonApp:
                             print(f"GNSS>> {parsed_data.identity}{nty}")
 
                         elif self.idonly:
-                            print(f"GNSS>> {parsed_data.identity}{nty}")
+                            print(f"GNSS>> {parsed_data.identity}")
 
                         else:
                             print(parsed_data)
@@ -721,6 +721,21 @@ def calcNextTOW(tow: int, interval: int):
     return nextTow
 
 
+def str2bool(v: str) -> bool:
+    """
+    Converts a command-line string argument to a bool.
+    (argparse's type=bool is broken: bool("False") is True)
+    """
+
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    if v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    raise ArgumentTypeError(f"Boolean value expected, got {v!r}")
+
+
 if __name__ == "__main__":
     arp = ArgumentParser(
         formatter_class=ArgumentDefaultsHelpFormatter,
@@ -740,6 +755,7 @@ if __name__ == "__main__":
         required=False,
         help="Print only the message entity (True|False)",
         default=False,
+        type=str2bool,
     )
     arp.add_argument(
         "-F",
@@ -747,7 +763,7 @@ if __name__ == "__main__":
         required=False,
         help="Print only filtered messages (True|False)",
         default=True,
-        type=bool
+        type=str2bool,
     )
     arp.add_argument(
         "-W",
