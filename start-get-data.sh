@@ -10,7 +10,7 @@ else
 	WaitforTow=$1
 fi
 echo 
-python3 ./get-data.py -F True -W $WaitforTow -i 86400 -O ~/SiT-calib_output.txt $2 $3 $4 $5 $6 $7 $8 $9
+python3 ./get-data.py -F True -W $WaitforTow -i 86400 -P "/dev/ttyS0" -O ~/SiT-calib_output.txt $2 $3 $4 $5 $6 $7 $8 $9
 
 deactivate
 
