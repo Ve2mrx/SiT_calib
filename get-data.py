@@ -714,11 +714,7 @@ def calcNextTOW(tow: int, interval: int):
     :return int: calculated next TOW
     """
 
-    nextTow = tow + interval
-    if nextTow > GPSWEEK_SECONDS:
-        nextTow = nextTow - GPSWEEK_SECONDS
-
-    return nextTow
+    return (tow + interval) % GPSWEEK_SECONDS
 
 
 def str2bool(v: str) -> bool:
@@ -734,6 +730,18 @@ def str2bool(v: str) -> bool:
     if v.lower() in ("no", "false", "f", "n", "0"):
         return False
     raise ArgumentTypeError(f"Boolean value expected, got {v!r}")
+
+
+def valid_tow(v: str) -> int:
+    """
+    Converts a command-line string argument to a valid GPS TOW.
+    """
+
+    tow = int(v)
+    if not (0 <= tow < GPSWEEK_SECONDS):
+        raise ArgumentTypeError(
+            f"TOW must be in range [0, {GPSWEEK_SECONDS}), got {tow}")
+    return tow
 
 
 if __name__ == "__main__":
@@ -771,7 +779,7 @@ if __name__ == "__main__":
         required=False,
         help="Wait for a specific TOW, grab and terminate (int)",
         default=False,
-        type=int
+        type=valid_tow
     )
     arp.add_argument(
         "-i",
@@ -860,8 +868,9 @@ if __name__ == "__main__":
                 if (bool(snapshot['TIM_TOS.data_valid']) and bool(snapshot['SiT.data_valid']) and bool(snapshot['TIM-SMEAS.data_valid']) and bool(snapshot['PUBX04.data_valid']) == True):
                     # Message data is valid!
                     if args.WaitTOW is not False:
-                        if (snapshot['TIM-TOS.TOW'] >= TOW_selected) and (snapshot['TIM-TOS.TOW'] < TOW_selected + (2 * 60)):
-                            # If TOW_selected is now or in the past 2 minutes:
+                        if ((snapshot['TIM-TOS.TOW'] - TOW_selected) % GPSWEEK_SECONDS) < (2 * 60):
+                            # If TOW_selected is now or in the past 2 minutes
+                            # (wraps correctly across the GPS week boundary):
                             printToScreen_calib_data(snapshot)
 
                             if bool(args.output) == True:
