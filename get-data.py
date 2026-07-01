@@ -535,7 +535,7 @@ def error_status(flag: int) -> str:
     :return str: "good" if the flag indicates no error, else "ERROR"
     """
 
-    if (flag == 7):
+    if flag == 7:
         return "good"
     return "ERROR"
 
@@ -549,7 +549,7 @@ def stability_status(flag: int) -> str:
     :return str: "stabilized" if the flag indicates stability, else "unstabilized"
     """
 
-    if (flag == 1):
+    if flag == 1:
         return "stabilized"
     return "unstabilized"
 
@@ -825,7 +825,7 @@ if __name__ == "__main__":
                 with data_lock:
                     snapshot = dict(data)
 
-                if (bool(snapshot['TIM_TOS.data_valid']) == True):
+                if snapshot['TIM_TOS.data_valid']:
                     if args.WaitTOW is not False:
                         if args.interval is not False:
                             TOW_next = calcNextTOW(
@@ -848,7 +848,7 @@ if __name__ == "__main__":
 
                             TOW_old = snapshot['TIM-TOS.TOW']
 
-                if (bool(snapshot['TIM_TOS.data_valid']) and bool(snapshot['SiT.data_valid']) and bool(snapshot['TIM-SMEAS.data_valid']) and bool(snapshot['PUBX04.data_valid']) == True):
+                if (snapshot['TIM_TOS.data_valid'] and snapshot['SiT.data_valid'] and snapshot['TIM-SMEAS.data_valid'] and snapshot['PUBX04.data_valid']):
                     # Message data is valid!
                     if args.WaitTOW is not False:
                         if ((snapshot['TIM-TOS.TOW'] - TOW_selected) % GPSWEEK_SECONDS) < (2 * 60):
@@ -856,7 +856,7 @@ if __name__ == "__main__":
                             # (wraps correctly across the GPS week boundary):
                             printToScreen_calib_data(snapshot)
 
-                            if bool(args.output) == True:
+                            if args.output:
                                 printToFile_calib_data(
                                     snapshot, args.output, TOW_selected)
 
