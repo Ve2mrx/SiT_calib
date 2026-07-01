@@ -702,7 +702,7 @@ def calcNextTOW(tow: int, interval: int):
     return (tow + interval) % GPSWEEK_SECONDS
 
 
-def save_tow_state(statefile: str, tow_selected: int, interval) -> None:
+def save_tow_state(statefile: str, tow_selected: int, interval, week: int) -> None:
     """
     Persist the current TOW_selected so a restart can resume without
     re-entering it. Written atomically so a power loss mid-write can't
@@ -711,12 +711,14 @@ def save_tow_state(statefile: str, tow_selected: int, interval) -> None:
     :param str statefile: path to the state file
     :param int tow_selected: TOW currently being waited for
     :param interval: capture interval in effect (int or False)
+    :param int week: GPS week number the TOW belongs to
     """
 
     tmp = f"{statefile}.tmp"
     with open(tmp, "w") as f:
         json.dump({
             "TOW_selected": tow_selected,
+            "week": week,
             "interval": interval,
             "saved_at": datetime.now(timezone.utc).isoformat(),
         }, f)
@@ -727,18 +729,30 @@ def save_tow_state(statefile: str, tow_selected: int, interval) -> None:
 
 def load_tow_state(statefile: str):
     """
-    Load a previously saved TOW_selected.
+    Load a previously saved TOW_selected, ignoring it if it's older than
+    the interval that was in effect when it was saved (i.e. at least one
+    capture cycle has already been missed, so the -i cadence can no longer
+    be trusted to resume correctly from).
 
     :param str statefile: path to the state file
 
-    :return int | None: the saved TOW_selected, or None if unavailable/invalid
+    :return int | None: the saved TOW_selected, or None if unavailable/stale/invalid
     """
 
     try:
         with open(statefile) as f:
             state = json.load(f)
-        return valid_tow(str(state["TOW_selected"]))
-    except (OSError, ValueError, KeyError, ArgumentTypeError):
+        tow = valid_tow(str(state["TOW_selected"]))
+        interval = state["interval"]
+        saved_at = datetime.fromisoformat(state["saved_at"])
+        age = (datetime.now(timezone.utc) - saved_at).total_seconds()
+        if age > interval:
+            print(
+                f"Ignoring stale state file {statefile}: saved {age:.0f}s ago "
+                f"(week {state.get('week')}, TOW={tow}), exceeds interval={interval}s")
+            return None
+        return tow
+    except (OSError, ValueError, KeyError, ArgumentTypeError, TypeError):
         return None
 
 
@@ -923,7 +937,8 @@ if __name__ == "__main__":
 
                                 if args.statefile:
                                     save_tow_state(
-                                        args.statefile, TOW_selected, args.interval)
+                                        args.statefile, TOW_selected, args.interval,
+                                        snapshot['TIM-TOS.week'])
 
                             else:
                                 sys.exit()
