@@ -56,8 +56,6 @@ from pyubx2 import (
     UBXParseError,
     UBXReader,
     gnss2str,
-    itow2utc,
-    GNSSLIST,
     UTCSTANDARD
 )
 
@@ -330,9 +328,9 @@ def invalidate_SiT_data(data: dict):
     Get SiT5721 data from SiTdev
 
     :param object SiT5721 SiTdev: Device to extract data from
-    :param dict dict: name of dict to store the extracted data
+    :param dict data: name of dict to store the extracted data
 
-    :return dict dict: Modified data dict
+    :return dict: Modified data dict
     """
 
     data['SiT.data_valid'] = False
@@ -385,9 +383,9 @@ def get_ubx_TIM_TOS_data(parsed_data: object, data: dict):
     Get uBlox TIM-TOS data from GNSS
 
     :param object UBXReader parsed_data: Data to fetch values from
-    :param dict dict: name of dict to store the extracted data
+    :param dict data: name of dict to store the extracted data
 
-    :return dict dict: Modified data dict
+    :return dict: Modified data dict
     """
 
     data['TIM-TOS.gnssId'] = int(parsed_data.gnssId)
@@ -431,9 +429,9 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, data: dict):
     Get uBlox TIM-SMEAS data from GNSS
 
     :param object UBXReader parsed_data: data to fetch values from
-    :param dict dict: name of dict to store the extracted data
+    :param dict data: name of dict to store the extracted data
 
-    :return dict dict: Modified data dict
+    :return dict: Modified data dict
     """
 
     if parsed_data.sourceId_03 == 2:
@@ -479,9 +477,9 @@ def get_nmea_PUBX04(parsed_data: object, data: dict):
     Get uBlox NMEA PUBX04 data from GNSS
 
     :param object UBXReader parsed_data: data to fetch values from
-    :param dict dict: name of dict to store the extracted data
+    :param dict data: name of dict to store the extracted data
 
-    :return dict dict: Modified data dict
+    :return dict: Modified data dict
     """
 
     data['PUBX04.utcWk'] = int(parsed_data.utcWk)
@@ -500,9 +498,9 @@ def reset_data_valid(data: dict):
     data_valid indicates if the message data exists and is up-to-date for this TOW.
     Resetting it is usually done when receiving a new TOW to invalidate the old data
 
-    :param dict dict: name of dict to store the modified data
+    :param dict data: name of dict to store the modified data
 
-    :return dict dict: Modified data dict
+    :return dict: Modified data dict
     """
 
     data['TIM_TOS.data_valid'] = False
@@ -518,7 +516,6 @@ def utcStdToStr(utcStandard: int) -> str:
     Converts the numeric UTC Standard value to a string
 
     :param int utcStandard: numeric UTC Standard value
-    :param dict dict: name of dict to store the modified data
 
     :return str: string representing the UTC Standard
     """
@@ -529,43 +526,61 @@ def utcStdToStr(utcStandard: int) -> str:
         return str(utcStandard)
 
 
-def printToFile_calib_data(data: dict, file: str):
+def error_status(flag: int) -> str:
+    """
+    Converts the SiT5721 error status flag to a status string.
+
+    :param int flag: SiT5721 error_status_flag register value
+
+    :return str: "good" if the flag indicates no error, else "ERROR"
+    """
+
+    if (flag == 7):
+        return "good"
+    return "ERROR"
+
+
+def stability_status(flag: int) -> str:
+    """
+    Converts the SiT5721 stability flag to a status string.
+
+    :param int flag: SiT5721 stability_flag register value
+
+    :return str: "stabilized" if the flag indicates stability, else "unstabilized"
+    """
+
+    if (flag == 1):
+        return "stabilized"
+    return "unstabilized"
+
+
+def flag_valid(flag: bool) -> str:
+    """
+    Converts a bool flag to a "Valid"/"INVALID" status string.
+
+    :param bool flag: flag to convert
+
+    :return str: "Valid", "INVALID", or str(flag) if flag isn't a bool
+    """
+
+    FLAGVALUES = {
+        False: "INVALID",
+        True: "Valid",
+    }
+    try:
+        return FLAGVALUES[flag]
+    except KeyError:
+        return str(flag)
+
+
+def printToFile_calib_data(data: dict, file: str, TOW_selected: int):
     """
     Print to file the results of the data collection
 
-    :param dict dict: name of dict to store the modified data
+    :param dict data: name of dict to store the modified data
     :param str file: filename used for output
+    :param int TOW_selected: TOW that was being waited for
     """
-
-    # Create status strings from flags
-    error_status_str = "undefined"
-    stability_status_str = "undefined"
-
-    def error_status(flag):
-        # print(flag)
-        if (flag == 7):
-            error_status = "good"
-        else:
-            error_status = "ERROR"
-        return error_status
-
-    def stability_status(flag):
-        # print(flag)
-        if (flag == 1):
-            error_status = "stabilized"
-        else:
-            error_status = "unstabilized"
-        return error_status
-
-    def flag_valid(flag: bool) -> str:
-        FLAGVALUES = {
-            False: "INVALID",
-            True: "Valid",
-        }
-        try:
-            return FLAGVALUES[flag]
-        except KeyError:
-            return str(flag)
 
     error_status_str = error_status(
         data['SiT.error_status_flag'])
@@ -621,42 +636,10 @@ def printToFile_calib_data(data: dict, file: str):
 
 def printToScreen_calib_data(data: dict):
     """
-    Converts the numeric UTC Standard value to a string
+    Print to screen the results of the data collection
 
-    :param int utcStandard: numeric UTC Standard value
-    :param dict dict: name of dict to store the modified data
-
-    :return str: string representing the UTC Standard
+    :param dict data: name of dict to store the modified data
     """
-    # Create status strings from flags
-    error_status_str = "undefined"
-    stability_status_str = "undefined"
-
-    def error_status(flag):
-        # print(flag)
-        if (flag == 7):
-            error_status = "good"
-        else:
-            error_status = "ERROR"
-        return error_status
-
-    def stability_status(flag):
-        # print(flag)
-        if (flag == 1):
-            error_status = "stabilized"
-        else:
-            error_status = "unstabilized"
-        return error_status
-
-    def flag_valid(flag: bool) -> str:
-        FLAGVALUES = {
-            False: "INVALID",
-            True: "Valid",
-        }
-        try:
-            return FLAGVALUES[flag]
-        except KeyError:
-            return str(flag)
 
     error_status_str = error_status(
         data['SiT.error_status_flag'])
@@ -874,7 +857,8 @@ if __name__ == "__main__":
                             printToScreen_calib_data(snapshot)
 
                             if bool(args.output) == True:
-                                printToFile_calib_data(snapshot, args.output)
+                                printToFile_calib_data(
+                                    snapshot, args.output, TOW_selected)
 
                             if args.interval is not False:
                                 TOW_selected = TOW_next
