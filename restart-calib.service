@@ -5,7 +5,7 @@ After=default.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/home/ve2mrx/project/ubx-data/mbt-ubx-apps/restart-calib.sh
+ExecStart=%h/project/ubx-data/mbt-ubx-apps/restart-calib.sh
 
 [Install]
 WantedBy=default.target

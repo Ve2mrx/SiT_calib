@@ -1,9 +1,11 @@
 #!/bin/bash
 echo "$@"
 
-source /home/ve2mrx/project/ubx-data/env/bin/activate
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-cd /home/ve2mrx/project/ubx-data/mbt-ubx-apps
+source "$SCRIPT_DIR/../env/bin/activate"
+
+cd "$SCRIPT_DIR"
 STATEFILE=~/SiT-calib_state.json
 INTERVAL=86400
 if [ -z "$1" ]; then
