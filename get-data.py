@@ -2,8 +2,6 @@
 Initially from pygnssutils - gnssapp.py
 Heavily modified by Martin Boissonneault
 
-*** FOR ILLUSTRATION ONLY - NOT FOR PRODUCTION USE ***
-
 Skeleton GNSS application which continuously receives, parses and prints
 NMEA, UBX or RTCM data from a receiver until the stop Event is set or
 stop() method invoked. Assumes receiver is connected via serial USB or UART1 port.
@@ -49,7 +47,6 @@ from serial import Serial
 
 from pyubx2 import (
     NMEA_PROTOCOL,
-    #    RTCM3_PROTOCOL,
     UBX_PROTOCOL,
     UBXMessage,
     UBXMessageError,
@@ -171,7 +168,6 @@ class GNSSSkeletonApp:
                 if stream.in_waiting:
                     _, parsed_data = ubr.read()
                     if parsed_data:
-                        # extract current navigation solution
                         self._extract_coordinates(parsed_data)
 
                         if self.filtered:
@@ -212,7 +208,6 @@ class GNSSSkeletonApp:
                 else:
                     sleep(0.01)
 
-                # send any queued output data to receiver
                 self._send_data(ubr.datastream, sendqueue)
 
             except (
@@ -322,8 +317,6 @@ class GNSSSkeletonApp:
         :param str eventtype: name of event to create
         """
 
-        # create event of specified eventtype
-
 
 def invalidate_SiT_data(data: dict):
     """
@@ -337,12 +330,10 @@ def invalidate_SiT_data(data: dict):
 
     data['SiT.data_valid'] = False
 
-    # SiT_config
     data['SiT.pull_value'] = None
     data['SiT.pull_range'] = None
     data['SiT.aging_compensation'] = None
     data['SiT.max_freq_ramp_rate'] = None
-    # SiT_dynamic
     data['SiT.uptime'] = None
     data['SiT.total_offset_written'] = None
     data['SiT.error_status_flag'] = None
@@ -364,12 +355,10 @@ def get_SiT_data(SiTdev: object, data: dict):
     SiTdev.read_SiT_config()
     SiTdev.read_SiT_dynamic()
 
-    # SiT_config
     data['SiT.pull_value'] = float(SiTdev.pull_value)
     data['SiT.pull_range'] = float(SiTdev.pull_range)
     data['SiT.aging_compensation'] = float(SiTdev.aging_compensation)
     data['SiT.max_freq_ramp_rate'] = float(SiTdev.max_freq_ramp_rate)
-    # SiT_dynamic
     data['SiT.uptime'] = int(SiTdev.uptime_uint)
     data['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
     data['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
@@ -436,8 +425,7 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, data: dict):
     :return dict: Modified data dict
     """
 
-    if parsed_data.sourceId_03 == 2:
-        # If the source for sourceId_03 is "EXTINT0", save
+    if parsed_data.sourceId_03 == 2:  # sourceId_03 == 2 means source is EXTINT0
         phaseOffset_03_float = (
             parsed_data.phaseOffset_03
             + parsed_data.phaseOffsetFrac_03
@@ -459,7 +447,6 @@ def get_ubx_TIM_SMEAS_data(parsed_data: object, data: dict):
         data['TIM-SMEAS.data_valid'] = True
 
     else:
-        # If the sourceId_03 is NOT "EXTINT0", clear
         data['TIM-SMEAS.iTOW'] = int(parsed_data.iTOW)
         data['TIM-SMEAS.source'] = "other"
         data['TIM-SMEAS.freqValid'] = None
@@ -921,7 +908,6 @@ if __name__ == "__main__":
                             TOW_old = snapshot['TIM-TOS.TOW']
 
                 if (snapshot['TIM_TOS.data_valid'] and snapshot['SiT.data_valid'] and snapshot['TIM-SMEAS.data_valid'] and snapshot['PUBX04.data_valid']):
-                    # Message data is valid!
                     if args.WaitTOW is not False:
                         if ((snapshot['TIM-TOS.TOW'] - TOW_selected) % GPSWEEK_SECONDS) < (2 * 60):
                             # If TOW_selected is now or in the past 2 minutes
@@ -944,7 +930,6 @@ if __name__ == "__main__":
                                 sys.exit()
 
                     else:
-                        # print_calib_data(data)
                         continue
 
     except KeyboardInterrupt:
