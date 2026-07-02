@@ -18,7 +18,9 @@ if [ -z "$1" ]; then
 			reason="no state file found at $STATEFILE"
 		fi
 		echo "$reason; manual TOW entry required to resume SiT-calib capture on $(hostname)." \
-			| mail -s "SiT-calib: manual TOW entry needed on $(hostname)" "virusmsg@ve2mrx.dyndns.info"
+			| mail -s "⚠ URGENT SiT-calib: manual TOW entry needed on $(hostname)" \
+				-a "Importance: high" -a "X-Priority: 1 (Highest)" -a "X-MSMail-Priority: High" \
+				"virusmsg@ve2mrx.dyndns.info"
 		read -p "Enter TOW: " WaitforTow
 	fi
 else
