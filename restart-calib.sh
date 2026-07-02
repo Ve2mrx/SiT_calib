@@ -34,15 +34,4 @@ else
 	exit 1
 fi
 
-if screen -list | grep -qE '\.SiT-save[[:space:]]'; then
-	echo "SiT-save screen already running."
-else
-	/home/ve2mrx/project/SiT5721/set-SiT-screen.sh
-	sleep 1
-	if screen -list | grep -qE '\.SiT-save[[:space:]]'; then
-		echo "SiT-save screen started."
-	else
-		echo "SiT-save screen failed to start!" >&2
-		exit 1
-	fi
-fi
+/home/ve2mrx/project/SiT5721/restart-SiT-screen.sh || exit 1
