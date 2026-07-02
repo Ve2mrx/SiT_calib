@@ -1,13 +1,15 @@
 #!/bin/sh
-# Run after an OS restart to resume calibration.
+# Run after an OS restart to resume calibration capture.
 #
 # Checks whether the SiT5721 kept its calibration through the restart:
 # - Retained (simple OS reboot, chip stayed powered): verify/start the
-#   capture screen (resumes its TOW automatically) and the SiT5721
-#   save-state screen.
+#   capture screen (resumes its TOW automatically).
 # - Reset to defaults (the chip itself lost power): report it and stop.
 #   Recalibrating (new pull_value/aging_compensation) is a manual decision
 #   made once fresh capture data is available - nothing is written here.
+#
+# The SiT5721 save-state screen is started separately at reboot via
+# restart-SiT-screen.sh (in the SiT5721 project).
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
@@ -33,5 +35,3 @@ else
 	echo "SiT-calib screen failed to start!" >&2
 	exit 1
 fi
-
-/home/ve2mrx/project/SiT5721/restart-SiT-screen.sh || exit 1
