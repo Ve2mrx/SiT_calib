@@ -12,6 +12,13 @@ if [ -z "$1" ]; then
 	if [ -f "$STATEFILE" ] && [ $(($(date +%s) - $(stat -c %Y "$STATEFILE"))) -le "$INTERVAL" ]; then
 		WaitforTow=
 	else
+		if [ -f "$STATEFILE" ]; then
+			reason="state file $STATEFILE is stale (older than $((INTERVAL / 3600))h)"
+		else
+			reason="no state file found at $STATEFILE"
+		fi
+		echo "$reason; manual TOW entry required to resume SiT-calib capture on $(hostname)." \
+			| mail -s "SiT-calib: manual TOW entry needed on $(hostname)" "virusmsg@ve2mrx.dyndns.info"
 		read -p "Enter TOW: " WaitforTow
 	fi
 else
