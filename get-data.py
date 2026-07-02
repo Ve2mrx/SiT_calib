@@ -1,31 +1,26 @@
 """
-Initially from pygnssutils - gnssapp.py
-Heavily modified by Martin Boissonneault
+SiT5721 GPSDO calibration capture tool.
 
-Skeleton GNSS application which continuously receives, parses and prints
-NMEA, UBX or RTCM data from a receiver until the stop Event is set or
-stop() method invoked. Assumes receiver is connected via serial USB or UART1 port.
+Reads u-blox TIM-TOS/TIM-SMEAS/PUBX04 messages from a GNSS receiver and
+pull_value/aging_compensation/uptime/status from a SiT5721 connected
+over I2C. Given a target GPS TOW (-W), waits for it and then snapshots
+both to screen and, if -O is given, to file; with -i, repeats every
+`interval` seconds after that, looping across GPS week boundaries. The
+TOW being waited for can be persisted/resumed across restarts with -S,
+so a reboot doesn't need it re-entered by hand.
 
-The app also implements basic methods needed by certain pygnssutils classes.
+Run with -h for the full list of command-line options.
 
-Optional keyword arguments:
+Originally forked from pygnssutils' gnssapp.py skeleton (GNSSSkeletonApp);
+heavily modified by Martin Boissonneault to add the SiT5721 reads and the
+capture/scheduling logic above.
 
-- sendqueue - any data placed on this Queue will be sent to the receiver
-  (e.g. UBX commands/polls or NTRIP RTCM data). Data must be a tuple of
-  (raw_data, parsed_data).
-- idonly - determines whether the app prints out the entire parsed message,
-  or just the message identity.
-- enableubx - suppresses NMEA receiver output and substitutes a minimum set
-  of UBX messages instead (NAV-PVT, NAV-SAT, NAV-DOP, RXM-RTCM).
-- showhacc - show estimate of horizonal accuracy in metres (if available).
-- filtered - Shows only messages related to SiT5721 calibration
-
-Uses:
+Requires:
 https://github.com/semuconsulting/pyubx2/tree/master
 https://github.com/semuconsulting/pynmeagps
 https://github.com/pyserial/pyserial
 apt python3-smbus
-mbt_SiT5721_lib
+mbt_SiT5721_lib (SiT5721 over I2C at address 0x60)
 
 Created on 2024 Dec 07
 
