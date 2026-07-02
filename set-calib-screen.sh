@@ -5,5 +5,5 @@ if screen -list | grep -qE '\.SiT-calib[[:space:]]'; then
 	exit 1
 fi
 
-screen -S SiT-calib -t SiT-calib -U /bin/bash -c 'exec "$0" "$@"' /home/ve2mrx/project/ubx-data/mbt-ubx-apps/start-get-data.sh "$@"
+screen -d -m -S SiT-calib -t SiT-calib -U /bin/bash -c 'exec "$0" "$@"' /home/ve2mrx/project/ubx-data/mbt-ubx-apps/start-get-data.sh "$@"
 #watch -n 600 /bin/bash
