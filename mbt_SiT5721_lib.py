@@ -143,10 +143,10 @@ class SiT5721:
         def stability_status(flag):
             # print(flag)
             if (flag == 1):
-                error_status = "stabilized"
+                stability_status = "stabilized"
             else:
-                error_status = "unstabilized"
-            return error_status
+                stability_status = "unstabilized"
+            return stability_status
 
         self.error_status_str = error_status(self.error_status_flag_uint)
         self.stability_status_str = stability_status(self.stability_flag_uint)
@@ -186,10 +186,6 @@ class SiT5721:
     def set_max_freq_ramp_rate(self, new_max_freq_ramp_rate):
         self.bus.write_i2c_block_data(self.address, 0x64, list(
             struct.pack('f', new_max_freq_ramp_rate)))
-
-    def reset_error(self):
-        self.bus.write_i2c_block_data(
-            self.address, 0xE1, list(0x64, 0x01))  # Will it work?
 
     def print_SiT_static(self):
         # self.read_SiT_static()
@@ -240,11 +236,11 @@ class SiT5721:
         print("Total offset written   {:=+.8g} ppm".format(
             self.total_offset_written / pow(10, -6)), end='\n')
 
-    def print_SiT_derived(self):
+    def print_SiT_derived(self, target_pull_value):
         print(
             "Target Pull Value      {:=+.8g} ppm".format(target_pull_value / pow(10, -6)), end='\n')
         print("Current Compensation   {:=+.8g} part/s".format(
-            self.calc_SiT_current_compensation(), end='\n'))
+            self.calc_SiT_current_compensation()), end='\n')
         print("New Pull Value         {:=+.8g} ppm".format(
             self.calc_SiT_new_pull_value_from_target(target_pull_value) / pow(10, -6)),
             end='\n')
