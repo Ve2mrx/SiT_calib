@@ -8,6 +8,30 @@ source "$SCRIPT_DIR/../env/bin/activate"
 cd "$SCRIPT_DIR"
 STATEFILE=~/SiT-calib_state.json
 INTERVAL=86400
+MAIL_FAIL_LOG=~/SiT-calib_mail-failures.log
+
+# `mail`/bsd-mailx always exits 0 even when the underlying sendmail (msmtp)
+# fails to deliver, so it can't be used to detect a failed send. Call msmtp
+# directly instead, whose exit code is reliable, and retry with backoff to
+# ride out the DNS-not-ready-yet window right after boot (observed cause of
+# a silently dropped alert: `journalctl --user -u restart-calib.service`
+# showed msmtp's own "Temporary failure in name resolution" at that boot).
+send_urgent_mail() {
+	local subject="$1" body="$2" recipient="virusmsg@ve2mrx.dyndns.info"
+	local attempt delay=5 max_attempts=6
+	for attempt in $(seq 1 "$max_attempts"); do
+		if printf 'Subject: %s\nTo: %s\nImportance: high\nX-Priority: 1 (Highest)\nX-MSMail-Priority: High\n\n%s\n' \
+				"$subject" "$recipient" "$body" \
+				| msmtp "$recipient" 2>>"$MAIL_FAIL_LOG"; then
+			return 0
+		fi
+		echo "$(date -Is) attempt $attempt/$max_attempts failed, retrying in ${delay}s" >>"$MAIL_FAIL_LOG"
+		sleep "$delay"
+		delay=$((delay * 2))
+	done
+	return 1
+}
+
 if [ -z "$1" ]; then
 	if [ -f "$STATEFILE" ] && [ $(($(date +%s) - $(stat -c %Y "$STATEFILE"))) -le "$INTERVAL" ]; then
 		WaitforTow=
@@ -17,10 +41,10 @@ if [ -z "$1" ]; then
 		else
 			reason="no state file found at $STATEFILE"
 		fi
-		echo "$reason; manual TOW entry required to resume SiT-calib capture on $(hostname)." \
-			| mail -s "⚠ URGENT SiT-calib: manual TOW entry needed on $(hostname)" \
-				-a "Importance: high" -a "X-Priority: 1 (Highest)" -a "X-MSMail-Priority: High" \
-				"virusmsg@ve2mrx.dyndns.info"
+		if ! send_urgent_mail "⚠ URGENT SiT-calib: manual TOW entry needed on $(hostname)" \
+				"$reason; manual TOW entry required to resume SiT-calib capture on $(hostname)."; then
+			echo "WARNING: failed to send manual-TOW alert email, see $MAIL_FAIL_LOG" >&2
+		fi
 		read -p "Enter TOW: " WaitforTow
 	fi
 else
