@@ -9,7 +9,13 @@
 # retry a failed send.
 
 MAIL_FAIL_LOG=~/restart-calib_mail-failures.log
-recipient="virusmsg@ve2mrx.dyndns.info"
+ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
+[ -f "$ALERT_CONFIG" ] && . "$ALERT_CONFIG"
+if [ -z "$ALERT_RECIPIENT" ]; then
+	echo "ALERT_RECIPIENT not set - create $ALERT_CONFIG" >&2
+	exit 1
+fi
+recipient="$ALERT_RECIPIENT"
 subject="⚠ URGENT mbt-ubx-apps: restart-calib.service failed on $(hostname)"
 body="restart-calib.service failed on $(hostname) at $(date -Is). This is the SiT5721 calibration capture restart chain. Check: journalctl -u restart-calib.service"
 
