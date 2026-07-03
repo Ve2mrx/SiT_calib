@@ -13,12 +13,32 @@ Pull Value / Aging compensation / UTC date are pulled from the verbose lines
 above the summary so we can flag re-tune days and stamp a real calendar date.
 """
 
+import io
+import os
 import re
 import sys
 import csv
 import json
 import struct
+import tempfile
 from datetime import datetime
+
+
+def atomic_write_text(path, text, newline=None):
+    """Write text to path via a same-dir temp file + os.replace(), so an
+    interrupted write can't leave a truncated/corrupt output file."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".")
+    try:
+        os.chmod(tmp_path, 0o644)
+        with os.fdopen(fd, "w", newline=newline) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
 
 # pull_ppm / aging_pps / total_ppm hold the SiT5721 register values recovered to
 # FULL float32 register precision (the log rounds them). pull_log8g / aging_log8g /
@@ -168,26 +188,28 @@ def main():
     if dates:
         print(f"date range           : {dates[0]}  ->  {dates[-1]}")
 
-    with open("parsed_records.json", "w") as fh:
-        json.dump(recs, fh, indent=2)
+    json_buf = io.StringIO()
+    json.dump(recs, json_buf, indent=2)
+    atomic_write_text("parsed_records.json", json_buf.getvalue())
 
     # CSV for the Excel VBA macro. repr() keeps full round-trip precision so
     # Excel receives the exact measured + full-register-precision values.
-    with open("parsed_records.csv", "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(CSV_FIELDS)
-        for i, r in enumerate(recs, 1):
-            w.writerow([
-                i, r["date"], r["time"], r["wno"], int(r["itow"]),
-                repr(r["phase_ns"]), repr(r["total_ppm"]),
-                ("" if r["pull_ppm"] is None else repr(r["pull_ppm"])),
-                ("" if r["aging_pps"] is None else repr(r["aging_pps"])),
-                (1 if r["retune"] else 0), r["flags"], r["status"],
-                ("" if r["pull_log8g"] is None else repr(r["pull_log8g"])),
-                ("" if r["aging_log8g"] is None else repr(r["aging_log8g"])),
-                r["dow_fr"],
-                repr(r["total_log"]),
-            ])
+    csv_buf = io.StringIO(newline="")
+    w = csv.writer(csv_buf)
+    w.writerow(CSV_FIELDS)
+    for i, r in enumerate(recs, 1):
+        w.writerow([
+            i, r["date"], r["time"], r["wno"], int(r["itow"]),
+            repr(r["phase_ns"]), repr(r["total_ppm"]),
+            ("" if r["pull_ppm"] is None else repr(r["pull_ppm"])),
+            ("" if r["aging_pps"] is None else repr(r["aging_pps"])),
+            (1 if r["retune"] else 0), r["flags"], r["status"],
+            ("" if r["pull_log8g"] is None else repr(r["pull_log8g"])),
+            ("" if r["aging_log8g"] is None else repr(r["aging_log8g"])),
+            r["dow_fr"],
+            repr(r["total_log"]),
+        ])
+    atomic_write_text("parsed_records.csv", csv_buf.getvalue(), newline="")
     print("\nWrote parsed_records.json and parsed_records.csv")
 
 
