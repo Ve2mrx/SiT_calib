@@ -1,11 +1,14 @@
 [Unit]
 Description=Resume SiT5721 calibration capture after restart
-After=default.target
+After=network-online.target
+Wants=network-online.target
+OnFailure=restart-calib-alert.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=%h/project/ubx-data/mbt-ubx-apps/restart-calib.sh
+User=ve2mrx
+ExecStart=/home/ve2mrx/project/ubx-data/mbt-ubx-apps/restart-calib.sh
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

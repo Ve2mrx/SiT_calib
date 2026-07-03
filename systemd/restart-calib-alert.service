@@ -1,0 +1,7 @@
+[Unit]
+Description=Send an alert email when restart-calib.service fails
+
+[Service]
+Type=oneshot
+User=ve2mrx
+ExecStart=/home/ve2mrx/project/ubx-data/mbt-ubx-apps/systemd/restart-calib-alert.sh
