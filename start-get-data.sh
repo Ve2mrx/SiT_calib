@@ -39,12 +39,41 @@ send_urgent_mail() {
 	return 1
 }
 
+# Reads TOW_selected from STATEFILE ourselves and prints it, but only if
+# it's not stale by the state's *own* recorded interval (same check
+# get-data.py's load_tow_state() does internally). This used to be left
+# for get-data.py to figure out on its own by passing no -W - but that ran
+# a second, independent freshness check moments later, which could
+# disagree with this one right around the interval boundary (e.g. a slow
+# boot). When they disagreed the wrong way (this script trusting the
+# state, get-data.py then rejecting it), get-data.py would silently run
+# forever with no capture target and no error, since args.WaitTOW stayed
+# False and all the wait/capture logic is gated on it. Doing the read
+# (and the freshness check) once, here, and passing -W explicitly removes
+# the race entirely - get-data.py's own auto-resume path is now only ever
+# exercised when someone runs it directly without -S/-W for troubleshooting.
+read_state_tow() {
+	python3 -c "
+import json
+from datetime import datetime, timezone
+with open('$STATEFILE') as f:
+    state = json.load(f)
+saved_at = datetime.fromisoformat(state['saved_at'])
+age = (datetime.now(timezone.utc) - saved_at).total_seconds()
+if age > state['interval']:
+    raise SystemExit(1)
+print(state['TOW_selected'])
+" 2>/dev/null
+}
+
 if [ -z "$1" ]; then
-	if [ -f "$STATEFILE" ] && [ $(($(date +%s) - $(stat -c %Y "$STATEFILE"))) -le "$INTERVAL" ]; then
-		WaitforTow=
-	else
+	WaitforTow=
+	if [ -f "$STATEFILE" ]; then
+		WaitforTow=$(read_state_tow)
+	fi
+	if [ -z "$WaitforTow" ]; then
 		if [ -f "$STATEFILE" ]; then
-			reason="state file $STATEFILE is stale (older than $((INTERVAL / 3600))h)"
+			reason="state file $STATEFILE is stale (older than its recorded interval) or unreadable"
 		else
 			reason="no state file found at $STATEFILE"
 		fi
@@ -69,6 +98,10 @@ deactivate
 
 if [ $status -ne 0 ]; then
 	echo "get-data.py exited with an error (status $status)."
+	if ! send_urgent_mail "⚠ URGENT SiT-calib: get-data.py exited with an error on $(hostname)" \
+			"get-data.py exited with status $status on $(hostname) at $(date -Is). SiT-calib capture has stopped. Check the SiT-calib screen output."; then
+		echo "WARNING: failed to send get-data.py failure alert email, see $MAIL_FAIL_LOG" >&2
+	fi
 fi
 
 #echo $0 " <TOW>"
