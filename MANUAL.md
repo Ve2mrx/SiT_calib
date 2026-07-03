@@ -47,10 +47,12 @@ cd mbt-ubx-apps
 ./install.sh                       # symlinks this repo's scripts into ~/bin
 ```
 
-`env-setup.sh` installs from PyPI, not from any locally vendored copies of
-those packages that may exist alongside `ubx-data/` — those are unrelated
-reference checkouts (see the "check imports for updates" note in project
-memory if reconciling versions matters).
+`env-setup.sh` installs from PyPI. Periodically check for upstream updates
+(`./env/bin/pip list --outdated`, or compare against
+`https://pypi.org/pypi/<pkg>/json`) and review each package's
+`RELEASE_NOTES.md` on GitHub for breaking changes before upgrading — last
+checked/upgraded 2026-07-03 (pynmeagps 1.0.43→1.1.5, pyubx2 1.2.48→1.3.3,
+pyrtcm 1.1.2→1.1.12; no breaking changes affected this codebase's usage).
 
 ## 2. Alert email configuration
 
