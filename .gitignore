@@ -3,3 +3,5 @@ project.code-workspace
 stream-real-capture.txt
 get-data_dev.py
 gnssapp.py
+parsed_records.csv
+parsed_records.json
