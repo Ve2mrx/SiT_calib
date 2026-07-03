@@ -20,12 +20,13 @@ import json
 import struct
 from datetime import datetime
 
-# pull_ppm / aging_pps hold the SiT5721 register values recovered to FULL
-# float32 register precision (the log only prints 8 sig figs). pull_log8g /
-# aging_log8g keep the raw 8-sig-fig log values for reference.
+# pull_ppm / aging_pps / total_ppm hold the SiT5721 register values recovered to
+# FULL float32 register precision (the log rounds them). pull_log8g / aging_log8g /
+# total_log keep the raw log values for reference. total_log is appended last so
+# the macro's field positions (dow_fr at index 14) are unchanged.
 CSV_FIELDS = ["idx", "date", "time", "wno", "itow", "phase_ns",
               "total_ppm", "pull_ppm", "aging_pps", "retune", "flags", "status",
-              "pull_log8g", "aging_log8g", "dow_fr"]
+              "pull_log8g", "aging_log8g", "dow_fr", "total_log"]
 
 # French weekday names, indexed by datetime.weekday() (Mon=0 .. Sun=6).
 # Row 14 ("Day of week") in Calc-new uses these.
@@ -50,8 +51,9 @@ def f32(x):
 
 
 def pull_full_ppm(ppm_8g):
-    """Recover full register precision for Pull Value. The register stores the
-    *fractional* offset as float32; the log prints fractional/1e-6 at 8 sig figs."""
+    """Recover full float32 register precision for a ppm-of-fractional-offset value:
+    Pull Value (0x61) and Total offset written (0xAB). The register stores the
+    *fractional* offset as float32; the log prints fractional/1e-6, rounded."""
     if ppm_8g is None:
         return None
     return f32(ppm_8g * 1e-6) / 1e-6
@@ -98,14 +100,15 @@ def parse(path):
 
             pull_8g = float(pull.group(1)) if pull else None
             aging_8g = float(aging.group(1)) if aging else None
+            total_log = float(m.group("total"))                       # raw log total (10 sig figs)
 
             rec = {
                 "date":        date,                                   # calendar date (UTC)
                 "time":        time,
                 "wno":         int(m.group("wno")),                    # -> row 9 (WNO end, measured)
                 "itow":        float(m.group("itow")),                 # -> row 10 (iTOW end, measured)
-                "phase_ns":    float(m.group("phase")),                # -> row 11 (HARDCODED)
-                "total_ppm":   float(m.group("total")),                # -> row 12 (HARDCODED)
+                "phase_ns":    float(m.group("phase")),                # -> row 11 (u-blox TIM-SMEAS ns)
+                "total_ppm":   pull_full_ppm(total_log),               # -> row 12, full f32 register value
                 "pull_ppm":    pull_full_ppm(pull_8g),                 # -> row 1 (re-tune only) full f32
                 "aging_pps":   aging_full(aging_8g),                   # -> row 2 (re-tune only) full f32
                 "pull_log8g":  pull_8g,                                # raw 8-sig-fig log value (reference)
@@ -113,6 +116,7 @@ def parse(path):
                 "dow_fr":      weekday_fr(date),                       # -> row 14 (Day of week, French)
                 "flags":       m.group("flags").strip(),
                 "status":      m.group("status").strip(),
+                "total_log":   total_log,                             # raw log total (reference)
             }
             records.append(rec)
             buf = []  # reset for next block
@@ -182,6 +186,7 @@ def main():
                 ("" if r["pull_log8g"] is None else repr(r["pull_log8g"])),
                 ("" if r["aging_log8g"] is None else repr(r["aging_log8g"])),
                 r["dow_fr"],
+                repr(r["total_log"]),
             ])
     print("\nWrote parsed_records.json and parsed_records.csv")
 
