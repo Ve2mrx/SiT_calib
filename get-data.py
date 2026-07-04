@@ -31,6 +31,12 @@ Created on 2024 Dec 07
 
 # pylint: disable=invalid-name, too-many-instance-attributes
 
+import os
+import sys
+
+# mbt_SiT5721_lib lives in the lib/mbt-SiT5721-lib submodule, shared with SiT5721
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "mbt-SiT5721-lib"))
+
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser, ArgumentTypeError
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
@@ -56,8 +62,6 @@ import smbus
 
 from datetime import datetime, timedelta, time, date, timezone
 import json
-import os
-import sys
 
 CONNECTED = 1
 

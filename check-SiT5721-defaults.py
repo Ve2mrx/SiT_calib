@@ -9,7 +9,11 @@ Exit 0: registers are at defaults (chip was reset, calibration lost).
 Exit 1: registers are not at defaults (calibration retained).
 """
 
+import os
 import sys
+
+# mbt_SiT5721_lib lives in the lib/mbt-SiT5721-lib submodule, shared with SiT5721
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "mbt-SiT5721-lib"))
 
 import smbus
 

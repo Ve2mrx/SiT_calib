@@ -1,0 +1,3 @@
+[submodule "lib/mbt-SiT5721-lib"]
+	path = lib/mbt-SiT5721-lib
+	url = /home/ve2mrx/project/mbt-SiT5721-lib.git
