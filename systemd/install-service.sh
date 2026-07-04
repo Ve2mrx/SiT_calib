@@ -27,9 +27,11 @@ if [ -f "$OLD_USER_UNIT" ]; then
 	echo "Disabling superseded --user unit..."
 	# sudo -u alone doesn't give systemctl --user a session bus; XDG_RUNTIME_DIR
 	# has to be set explicitly or it fails with "Failed to connect to bus".
-	sudo -u ve2mrx XDG_RUNTIME_DIR=/run/user/1000 systemctl --user disable restart-calib.service
+	# Derived, not hardcoded, in case ve2mrx's UID ever changes.
+	ve2mrx_uid=$(id -u ve2mrx)
+	sudo -u ve2mrx XDG_RUNTIME_DIR="/run/user/$ve2mrx_uid" systemctl --user disable restart-calib.service
 	rm -f "$OLD_USER_UNIT"
-	sudo -u ve2mrx XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload
+	sudo -u ve2mrx XDG_RUNTIME_DIR="/run/user/$ve2mrx_uid" systemctl --user daemon-reload
 fi
 
 echo "Installed and enabled restart-calib.service (system unit)."
