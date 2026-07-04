@@ -59,6 +59,7 @@ from pyubx2 import (
 
 from mbt_SiT5721_lib import SiT5721
 import smbus
+import parse_sit
 
 from datetime import datetime, timedelta, time, date, timezone
 import json
@@ -916,6 +917,22 @@ if __name__ == "__main__":
                             if args.output:
                                 printToFile_calib_data(
                                     snapshot, args.output, TOW_selected)
+                                try:
+                                    parse_sit.regenerate(
+                                        args.output, verbose=False)
+                                except Exception as e:
+                                    out_dir = os.path.dirname(
+                                        os.path.abspath(args.output)) or "."
+                                    err_log = os.path.join(
+                                        out_dir, "parsed_records_errors.log")
+                                    print(
+                                        f"WARNING: parse_sit regeneration failed: {e!r}", file=sys.stderr)
+                                    try:
+                                        with open(err_log, "a") as f:
+                                            f.write(
+                                                f"{datetime.now(timezone.utc).isoformat()} {e!r}\n")
+                                    except OSError:
+                                        pass
 
                             if args.interval is not False:
                                 TOW_selected = TOW_next

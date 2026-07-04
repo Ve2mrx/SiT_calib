@@ -5,3 +5,4 @@ get-data_dev.py
 gnssapp.py
 parsed_records.csv
 parsed_records.json
+parsed_records_errors.log

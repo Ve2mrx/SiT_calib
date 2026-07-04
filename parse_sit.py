@@ -11,6 +11,21 @@ summary line of the form:
 Fields on that line: WNO, iTOW, phaseOffset(ns), totalOffsetWritten(ppm), flags, status.
 Pull Value / Aging compensation / UTC date are pulled from the verbose lines
 above the summary so we can flag re-tune days and stamp a real calendar date.
+
+Note for Cowork (spreadsheet/VBA side): `regenerate()` below is called
+both from this file's own CLI (`main()`) *and* automatically from
+get-data.py's capture loop after every daily record, wrapped in a
+try/except there so a parsing bug can't take down live GNSS capture.
+If you add a new field for the spreadsheet: extend `parse()`'s `rec`
+dict, `CSV_FIELDS`, and the CSV row-building loop in `regenerate()`
+together, keep `regenerate()` itself side-effect-free beyond writing
+parsed_records.json/.csv (no new file paths without updating
+get-data.py's caller too), and keep it safe to call once a day forever
+without leaking memory/handles. `regenerate()` also refuses to write a
+parsed_records.json with fewer records than the one already on disk
+(raises RuntimeError instead, caught upstream) - SiT-calib_output.txt is
+append-only, so a drop means something's wrong, not real data; pass
+force=True (or CLI --force) to override deliberately.
 """
 
 import io
@@ -160,37 +175,74 @@ def annotate_retune(records):
     return records
 
 
-def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "SiT-calib_output.txt"
+def regenerate(path, verbose=True, force=False):
+    """
+    Parse `path` and (re)write parsed_records.json/.csv next to it.
+
+    Output files are written alongside `path` itself (not the caller's
+    cwd), so this is safe to call regardless of where the process
+    invoking it happens to be running from.
+
+    Refuses to overwrite an existing parsed_records.json with fewer
+    records than it already has, unless `force` is set - SiT-calib_output.txt
+    is append-only, so a record-count drop means a truncated/corrupted
+    read or a parsing regression, not legitimate new data. Nothing is
+    written if this check fails.
+
+    :param str path: SiT-calib_output.txt (or equivalent) to parse
+    :param bool verbose: print the full record table + sanity checks
+        (standalone CLI use); if False, only a one-line summary
+    :param bool force: skip the record-count regression check
+    :return list: the parsed/annotated records
+    :raises RuntimeError: if the regression check fails and force=False
+    """
     recs = annotate_retune(parse(path))
+    out_dir = os.path.dirname(os.path.abspath(path)) or "."
+    json_path = os.path.join(out_dir, "parsed_records.json")
 
-    print(f"Parsed {len(recs)} daily records from {path}\n")
-    hdr = f"{'#':>3} {'date':10} {'WNO':>5} {'iTOW':>8} {'phase_ns':>16} {'total_ppm':>14} {'pull_ppm':>14} {'aging_pps':>14} {'retune':>6}"
-    print(hdr)
-    print("-" * len(hdr))
-    for i, r in enumerate(recs, 1):
-        print(f"{i:>3} {str(r['date']):10} {r['wno']:>5} {r['itow']:>8.0f} "
-              f"{r['phase_ns']:>16.3f} {r['total_ppm']:>14.10g} "
-              f"{(r['pull_ppm'] if r['pull_ppm'] is not None else float('nan')):>14.11g} "
-              f"{(r['aging_pps'] if r['aging_pps'] is not None else float('nan')):>14.6g} "
-              f"{'YES' if r['retune'] else '':>6}")
+    if not force:
+        try:
+            with open(json_path) as f:
+                existing_count = len(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError):
+            existing_count = 0
 
-    # sanity checks
-    missing_date = [i for i, r in enumerate(recs, 1) if r["date"] is None]
-    dates = [r["date"] for r in recs if r["date"]]
-    dupes = sorted({d for d in dates if dates.count(d) > 1})
-    retunes = [i for i, r in enumerate(recs, 1) if r["retune"]]
-    print("\n--- sanity ---")
-    print(f"records              : {len(recs)}")
-    print(f"missing date         : {missing_date or 'none'}")
-    print(f"duplicate dates      : {dupes or 'none'}")
-    print(f"re-tune day indices  : {retunes or 'none'}")
-    if dates:
-        print(f"date range           : {dates[0]}  ->  {dates[-1]}")
+        if len(recs) < existing_count:
+            raise RuntimeError(
+                f"refusing to overwrite {json_path} ({existing_count} records) "
+                f"with only {len(recs)} newly parsed from {path} - looks like "
+                f"a truncated/corrupted read rather than real data (pass "
+                f"force=True to override)"
+            )
+
+    if verbose:
+        print(f"Parsed {len(recs)} daily records from {path}\n")
+        hdr = f"{'#':>3} {'date':10} {'WNO':>5} {'iTOW':>8} {'phase_ns':>16} {'total_ppm':>14} {'pull_ppm':>14} {'aging_pps':>14} {'retune':>6}"
+        print(hdr)
+        print("-" * len(hdr))
+        for i, r in enumerate(recs, 1):
+            print(f"{i:>3} {str(r['date']):10} {r['wno']:>5} {r['itow']:>8.0f} "
+                  f"{r['phase_ns']:>16.3f} {r['total_ppm']:>14.10g} "
+                  f"{(r['pull_ppm'] if r['pull_ppm'] is not None else float('nan')):>14.11g} "
+                  f"{(r['aging_pps'] if r['aging_pps'] is not None else float('nan')):>14.6g} "
+                  f"{'YES' if r['retune'] else '':>6}")
+
+        # sanity checks
+        missing_date = [i for i, r in enumerate(recs, 1) if r["date"] is None]
+        dates = [r["date"] for r in recs if r["date"]]
+        dupes = sorted({d for d in dates if dates.count(d) > 1})
+        retunes = [i for i, r in enumerate(recs, 1) if r["retune"]]
+        print("\n--- sanity ---")
+        print(f"records              : {len(recs)}")
+        print(f"missing date         : {missing_date or 'none'}")
+        print(f"duplicate dates      : {dupes or 'none'}")
+        print(f"re-tune day indices  : {retunes or 'none'}")
+        if dates:
+            print(f"date range           : {dates[0]}  ->  {dates[-1]}")
 
     json_buf = io.StringIO()
     json.dump(recs, json_buf, indent=2)
-    atomic_write_text("parsed_records.json", json_buf.getvalue())
+    atomic_write_text(json_path, json_buf.getvalue())
 
     # CSV for the Excel VBA macro. repr() keeps full round-trip precision so
     # Excel receives the exact measured + full-register-precision values.
@@ -209,8 +261,21 @@ def main():
             r["dow_fr"],
             repr(r["total_log"]),
         ])
-    atomic_write_text("parsed_records.csv", csv_buf.getvalue(), newline="")
-    print("\nWrote parsed_records.json and parsed_records.csv")
+    atomic_write_text(os.path.join(out_dir, "parsed_records.csv"), csv_buf.getvalue(), newline="")
+
+    if verbose:
+        print("\nWrote parsed_records.json and parsed_records.csv")
+    else:
+        print(f"parse_sit: regenerated parsed_records.json/csv ({len(recs)} records) from {path}")
+
+    return recs
+
+
+def main():
+    force = "--force" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    path = args[0] if args else "SiT-calib_output.txt"
+    regenerate(path, verbose=True, force=force)
 
 
 if __name__ == "__main__":
