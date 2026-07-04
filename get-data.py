@@ -683,10 +683,14 @@ def calcNextTOW(tow: int, interval: int):
     :param int tow: current TOW
     :param int interval: interval in second between TOW
 
-    :return int: calculated next TOW
+    :return tuple[int, int]: (next TOW, number of GPS weeks crossed to get
+        there - 0 normally, 1 when tow + interval wraps past the end of the
+        GPS week; the caller must add this to the current week number, or
+        the saved (TOW, week) pair will silently mismatch)
     """
 
-    return (tow + interval) % GPSWEEK_SECONDS
+    total = tow + interval
+    return total % GPSWEEK_SECONDS, total // GPSWEEK_SECONDS
 
 
 def save_tow_state(statefile: str, tow_selected: int, interval, week: int) -> None:
@@ -858,6 +862,7 @@ if __name__ == "__main__":
             print(f"Resumed TOW_selected={TOW_selected} from {args.statefile}")
 
     TOW_next = TOW_selected
+    weeks_crossed = 0
 
     try:
         print("Starting GNSS reader/writer...\n")
@@ -887,12 +892,17 @@ if __name__ == "__main__":
                 if snapshot['TIM_TOS.data_valid']:
                     if args.WaitTOW is not False:
                         if args.interval is not False:
-                            TOW_next = calcNextTOW(
+                            TOW_next, weeks_crossed = calcNextTOW(
                                 TOW_selected, args.interval)
 
                         if snapshot['TIM-TOS.TOW'] != TOW_old:
+                            # Signed distance, wrapped across the GPS week
+                            # boundary (centered on 0 so a small negative
+                            # overshoot right at/after the target still
+                            # shows correctly instead of jumping to +7 days).
                             waitTimeRemaining = int(
-                                TOW_selected - snapshot['TIM-TOS.TOW'])
+                                (TOW_selected - snapshot['TIM-TOS.TOW'] + GPSWEEK_SECONDS // 2)
+                                % GPSWEEK_SECONDS - GPSWEEK_SECONDS // 2)
 
                             print(
                                 f"...Waiting for TOW={TOW_selected:6d}, we're at {snapshot['TIM-TOS.TOW']:6d}", end='')
@@ -940,7 +950,7 @@ if __name__ == "__main__":
                                 if args.statefile:
                                     save_tow_state(
                                         args.statefile, TOW_selected, args.interval,
-                                        snapshot['TIM-TOS.week'])
+                                        snapshot['TIM-TOS.week'] + weeks_crossed)
 
                             else:
                                 sys.exit()
