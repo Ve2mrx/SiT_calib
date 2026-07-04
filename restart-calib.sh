@@ -147,7 +147,10 @@ elif [ -f "$STATEFILE" ] && [ $(($(date +%s) - $(stat -c %Y "$STATEFILE"))) -le 
 	# automatically - start-get-data.sh will make the same freshness check
 	# itself moments later inside the screen; nothing touches STATEFILE in
 	# between, so this is a faithful preview of which path it will take.
-	state_age_min=$(( ($(date +%s) - $(stat -c %Y "$STATEFILE")) / 60 ))
+	state_age_sec=$(( $(date +%s) - $(stat -c %Y "$STATEFILE") ))
+	state_age_min=$(( state_age_sec / 60 ))
+	state_age_hms=$(printf '%dh%02dm%02ds' $((state_age_sec / 3600)) $((state_age_sec % 3600 / 60)) $((state_age_sec % 60)))
+	limit_min=$((INTERVAL / 60))
 	tow_info=$(python3 -c "
 import json
 with open('$STATEFILE') as f:
@@ -155,6 +158,6 @@ with open('$STATEFILE') as f:
 print(f\"TOW {d['TOW_selected']} (week {d['week']}), saved {d['saved_at']}\")
 " 2>/dev/null)
 	subject="SiT-calib: reboot resumed capture on $(hostname)"
-	body="Device rebooted at $(date -Is). SiT5721 calibration retained (no reset). Previous ${tow_info:-state in $STATEFILE} had not expired (saved ${state_age_min}m ago, limit $((INTERVAL / 60))m) and was used automatically to resume capture - no manual TOW entry needed."
+	body="Device rebooted at $(date -Is). SiT5721 calibration retained (no reset). Previous ${tow_info:-state in $STATEFILE} had not expired (saved ${state_age_hms} ago, ${state_age_min}m of ${limit_min}m limit) and was used automatically to resume capture - no manual TOW entry needed."
 	send_mail "$subject" "$body"
 fi
