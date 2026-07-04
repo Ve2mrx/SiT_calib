@@ -26,6 +26,22 @@ parsed_records.json with fewer records than the one already on disk
 (raises RuntimeError instead, caught upstream) - SiT-calib_output.txt is
 append-only, so a drop means something's wrong, not real data; pass
 force=True (or CLI --force) to override deliberately.
+
+Power-loss handling (new 2026-07-04): when the SiT5721 loses power,
+restart-SiT5721.py (SiT5721 repo) recalculates and reloads an
+aging-corrected Pull Value, then mbt-ubx-apps/restart-calib.sh archives
+the *previous* SiT-calib_output.txt/parsed_records.json/.csv to
+~/SiT-calib_archive/ (as SiT-calib_output_<timestamp>.txt/
+parsed_records_<timestamp>.json/.csv) and starts a fresh
+SiT-calib_output.txt (with a leading `#`-comment noting the event -
+harmless to this parser, it just accumulates into an unmatched `buf` and
+is discarded) before capture resumes. There is deliberately no in-band
+field/flag for this in parse()/CSV_FIELDS: the archive boundary *is* the
+mark. For Cowork: a new calibration epoch is signaled by
+parsed_records.json/.csv simply containing fewer/newer records than
+before with a corresponding new archive file appearing alongside them -
+treat that as "start a new epoch" in the spreadsheet, and consult the
+archived files (same schema) for the prior epoch's history if needed.
 """
 
 import io

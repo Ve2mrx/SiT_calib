@@ -1,6 +1,6 @@
 [Unit]
 Description=Resume SiT5721 calibration capture after restart
-After=network-online.target
+After=network-online.target restart-sit5721-pull.service
 Wants=network-online.target
 OnFailure=restart-calib-alert.service
 
