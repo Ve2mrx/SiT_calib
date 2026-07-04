@@ -112,16 +112,14 @@ echo "SiT-calib screen running."
 
 STATEFILE=~/SiT-calib_state.json  # must match start-get-data.sh
 INTERVAL=86400                    # must match start-get-data.sh
-ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
-[ -f "$ALERT_CONFIG" ] && . "$ALERT_CONFIG"
+# Relies on msmtp's own `aliases /etc/aliases` directive in /etc/msmtprc
+# (root -> real address) - see project memory alert-config-vs-aliases-todo.
+# Overridable via env var for testing without sending a real alert.
+ALERT_RECIPIENT="${ALERT_RECIPIENT:-root}"
 MAIL_FAIL_LOG=~/restart-calib_mail-failures.log
 
 send_mail() {
 	local subject="$1" body="$2"
-	if [ -z "$ALERT_RECIPIENT" ]; then
-		echo "$(date -Is) ALERT_RECIPIENT not set - create $ALERT_CONFIG" >>"$MAIL_FAIL_LOG"
-		return
-	fi
 	local attempt=0 delay=5 max_attempts=6 sent=1
 	while [ "$attempt" -lt "$max_attempts" ]; do
 		attempt=$((attempt + 1))

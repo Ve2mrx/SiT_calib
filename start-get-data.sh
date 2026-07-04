@@ -9,8 +9,10 @@ cd "$SCRIPT_DIR"
 STATEFILE=~/SiT-calib_state.json
 INTERVAL=86400
 MAIL_FAIL_LOG=~/SiT-calib_mail-failures.log
-ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
-[ -f "$ALERT_CONFIG" ] && . "$ALERT_CONFIG"
+# Relies on msmtp's own `aliases /etc/aliases` directive in /etc/msmtprc
+# (root -> real address) - see project memory alert-config-vs-aliases-todo.
+# Overridable via env var for testing without sending a real alert.
+ALERT_RECIPIENT="${ALERT_RECIPIENT:-root}"
 
 # `mail`/bsd-mailx always exits 0 even when the underlying sendmail (msmtp)
 # fails to deliver, so it can't be used to detect a failed send. Call msmtp
@@ -20,10 +22,6 @@ ALERT_CONFIG="${ALERT_CONFIG:-/home/ve2mrx/.config/sit-alerts.conf}"
 # showed msmtp's own "Temporary failure in name resolution" at that boot).
 send_urgent_mail() {
 	local subject="$1" body="$2"
-	if [ -z "$ALERT_RECIPIENT" ]; then
-		echo "$(date -Is) ALERT_RECIPIENT not set - create $ALERT_CONFIG" >>"$MAIL_FAIL_LOG"
-		return 1
-	fi
 	local recipient="$ALERT_RECIPIENT"
 	local attempt delay=5 max_attempts=6
 	for attempt in $(seq 1 "$max_attempts"); do

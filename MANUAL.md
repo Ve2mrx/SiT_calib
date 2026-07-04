@@ -77,26 +77,18 @@ pyrtcm 1.1.2→1.1.12; no breaking changes affected this codebase's usage).
 
 ## 2. Alert email configuration
 
-Shared with the SiT5721 project. Create (once, host-wide, **not** tracked
-by either git repo):
-
-```sh
-mkdir -p ~/.config
-cat > ~/.config/sit-alerts.conf <<'EOF'
-ALERT_RECIPIENT="root"
-EOF
-```
-
 All alert-sending scripts in this repo (`start-get-data.sh`,
-`systemd/restart-calib-alert.sh`) source this file and refuse to send
-(fail loud in the log, not silently) if `ALERT_RECIPIENT` is unset. As of
-2026-07-04, `/etc/msmtprc` has an `aliases /etc/aliases` directive (see
-project memory `alert-config-vs-aliases-todo`), so `msmtp` now resolves
-`root`/`ve2mrx`/etc. to their `/etc/aliases` targets - `ALERT_RECIPIENT`
-can be a bare local alias like `root`, not just a literal address. On a
-host without that directive configured, it must be a real,
-directly-deliverable address instead - `msmtp` does not consult
-`/etc/aliases` on its own.
+`restart-calib.sh`, `systemd/restart-calib-alert.sh`) default
+`ALERT_RECIPIENT` to `root` and rely on `/etc/msmtprc`'s
+`aliases /etc/aliases` directive (added 2026-07-04, see project memory
+`alert-config-vs-aliases-todo`) to resolve that to a real deliverable
+address - no per-host config file needed anymore (retired
+`~/.config/sit-alerts.conf` the same day, once this was live-verified).
+On a host without that directive configured, `msmtp` does not consult
+`/etc/aliases` on its own, so `root` would fail - either add the
+directive there too, or override the default:
+`ALERT_RECIPIENT="you@example.com" ./start-get-data.sh` (the env var is
+also how to redirect a test send without touching the real alias).
 
 Emails sent by this project:
 - **Normal priority**: reboot confirmation from `restart-calib.sh`, sent
@@ -206,4 +198,3 @@ starts counting from zero - no `--force` needed. See project memory
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with SiT5721) - `SiT5721` I2C class |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
-| `~/.config/sit-alerts.conf` | Shared alert recipient config (see above) |
