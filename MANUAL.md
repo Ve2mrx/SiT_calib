@@ -21,6 +21,8 @@ deliberately shrink it (e.g. after hand-editing the log). Run
 Companion project: [SiT5721](../../SiT5721/) (the GPSDO chip's own restart/
 calibration-save side). Shared alert email config is documented in both
 manuals identically — see [Alert email configuration](#alert-email-configuration).
+See also [capture-status](../capture-status/) for a one-shot Go/No-go
+health check spanning both projects.
 
 **Keep this file up to date** whenever install steps, file paths, or the
 systemd/email setup change.
@@ -135,6 +137,9 @@ waiting — this is intentional (see project memory
 
 ## Operations
 
+- **Quick Go/No-go check**: `~/bin/sit-status.sh` (see
+  [capture-status](../capture-status/)) checks both this repo's
+  `SiT-calib` capture and the SiT5721 repo's register-save loop in one shot.
 - **Check it's running**: `screen -list | grep SiT-calib`, or
   `~/get-calib-screen.sh` to reattach (detach again with `Ctrl-A d`,
   don't kill the session).
