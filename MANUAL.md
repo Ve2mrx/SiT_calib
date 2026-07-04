@@ -83,15 +83,20 @@ by either git repo):
 ```sh
 mkdir -p ~/.config
 cat > ~/.config/sit-alerts.conf <<'EOF'
-ALERT_RECIPIENT="you@example.com"
+ALERT_RECIPIENT="root"
 EOF
 ```
 
 All alert-sending scripts in this repo (`start-get-data.sh`,
 `systemd/restart-calib-alert.sh`) source this file and refuse to send
-(fail loud in the log, not silently) if `ALERT_RECIPIENT` is unset. The
-recipient **must** be a real, directly-deliverable address — `msmtp`
-does not consult `/etc/aliases`, so a bare local username will fail.
+(fail loud in the log, not silently) if `ALERT_RECIPIENT` is unset. As of
+2026-07-04, `/etc/msmtprc` has an `aliases /etc/aliases` directive (see
+project memory `alert-config-vs-aliases-todo`), so `msmtp` now resolves
+`root`/`ve2mrx`/etc. to their `/etc/aliases` targets - `ALERT_RECIPIENT`
+can be a bare local alias like `root`, not just a literal address. On a
+host without that directive configured, it must be a real,
+directly-deliverable address instead - `msmtp` does not consult
+`/etc/aliases` on its own.
 
 Emails sent by this project:
 - **Normal priority**: reboot confirmation from `restart-calib.sh`, sent
