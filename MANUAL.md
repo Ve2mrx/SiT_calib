@@ -41,11 +41,18 @@ location, so the venv **must** exist as a sibling of `mbt-ubx-apps/`, at
 
 ```sh
 cd project/ubx-data
+git clone --recurse-submodules <mbt-ubx-apps-url> mbt-ubx-apps
 ./env-setup.sh                     # creates ./env, pip-installs pynmeagps/
                                     # pyubx2/pyrtcm/pyserial from PyPI
 cd mbt-ubx-apps
 ./install.sh                       # symlinks this repo's scripts into ~/bin
 ```
+
+`get-data.py` and `check-SiT5721-defaults.py` import the SiT5721 I2C
+library from `lib/mbt-SiT5721-lib`, a git submodule shared with the
+SiT5721 repo (single source of truth — see that submodule's own README).
+If you cloned without `--recurse-submodules`, run
+`git submodule update --init` before running either script.
 
 `env-setup.sh` installs from PyPI. Periodically check for upstream updates
 (`./env/bin/pip list --outdated`, or compare against
@@ -134,6 +141,7 @@ waiting — this is intentional (see project memory
 |---|---|
 | `~/SiT-calib_state.json` | Persisted `TOW_selected`/`week`/`interval`/`saved_at`, used to auto-resume across restarts |
 | `~/SiT-calib_output.txt` | Append-only capture history (input to `parse_sit.py`) |
+| `lib/mbt-SiT5721-lib/` | Git submodule (shared with SiT5721) - `SiT5721` I2C class |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
 | `~/.config/sit-alerts.conf` | Shared alert recipient config (see above) |
