@@ -590,9 +590,9 @@ def printToFile_calib_data(data: dict, file: str, TOW_selected: int):
         print(
             f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})", file=f)
         print(
-            f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ns", file=f)
+            f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ps/s", file=f)
         print(
-            f"TIM-SMEAS  phase uncertainty:      {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns", file=f)
+            f"TIM-SMEAS  phase uncertainty:      {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ps/s", file=f)
         print(file=f)
 
         print(
@@ -645,9 +645,9 @@ def printToScreen_calib_data(data: dict):
     print(
         f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})")
     print(
-        f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ns")
+        f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ps/s")
     print(
-        f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ns")
+        f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ps/s")
     print()
 
     print(

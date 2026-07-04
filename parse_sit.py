@@ -42,6 +42,16 @@ parsed_records.json/.csv simply containing fewer/newer records than
 before with a corresponding new archive file appearing alongside them -
 treat that as "start a new epoch" in the spreadsheet, and consult the
 archived files (same schema) for the prior epoch's history if needed.
+
+Unit-label fix (2026-07-04): get-data.py's verbose "TIM-SMEAS ... freq
+offset"/"freq uncertainty" lines in SiT-calib_output.txt were mislabeled
+"ns" - those fields are actually ps/s (per u-blox's TIM-SMEAS scaling,
+2**-8 ps/s per LSB), not a time offset like phaseOffset/phaseUnc genuinely
+are. Fixed to read "ps/s" going forward. For Cowork: this is a display-only
+fix in the raw log text - parse()/CSV_FIELDS never captured freqOffset/
+freqUnc (only phase_ns), so parsed_records.json/.csv and anything built
+from them are unaffected; only raw SiT-calib_output.txt/archived copies
+from before this date show the old "ns" mislabel on those two lines.
 """
 
 import io
