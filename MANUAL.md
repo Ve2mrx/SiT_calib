@@ -68,6 +68,17 @@ SiT5721 repo (single source of truth — see that submodule's own README).
 If you cloned without `--recurse-submodules`, run
 `git submodule update --init` before running either script.
 
+For provisioning a whole fresh device (OS reinstall/SD-card swap) rather
+than just this repo, see `../reinstall.sh` — it drives the steps above
+plus the SiT5721/capture-status repos, OS packages, I2C/serial checks,
+and systemd units in one idempotent, re-runnable pass.
+
+`env-setup.sh` creates `./env` with the stdlib `python3 -m venv
+--system-site-packages` (not the third-party `virtualenv` package this
+used before 2026-07-06) — avoids a `pip install --user` at the system
+level, which Trixie's PEP 668 (`externally-managed-environment`) would
+otherwise block.
+
 `env-setup.sh` installs from PyPI. Periodically check for upstream updates
 (`./env/bin/pip list --outdated`, or compare against
 `https://pypi.org/pypi/<pkg>/json`) and review each package's
@@ -198,3 +209,5 @@ starts counting from zero - no `--force` needed. See project memory
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with SiT5721) - `SiT5721` I2C class |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
+| `../env-setup.sh` | (Re)creates the shared venv (`../env/`) - stdlib `python3 -m venv --system-site-packages`, PEP-668-safe |
+| `../reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
