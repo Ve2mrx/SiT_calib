@@ -143,6 +143,41 @@ will prompt interactively (`Enter TOW:`) and email an urgent alert while
 waiting — this is intentional (see project memory
 `restart-calib-manual-tow`), not a bug.
 
+## 5. NAS sync (calibration files → Synology)
+
+`../ubx-data/nas-sync/` one-way pushes `~/parsed_records.csv`/`.json`,
+`~/SiT-calib_output.txt`, `~/SiT-calib_state.json`, the SiT5721 repo's
+`SiT-settings2.ini` (read-only reference), and any archived
+`~/SiT-calib_output_*.txt`/`~/SiT-calib_archive/` files to the Synology NAS
+(`nas-2.ve2mrx`, share `ubx-data-live`, mounted via CIFS at
+`/mnt/ubx-data-live`) — from there Synology Drive syncs it to
+`D:\SynologyDrive\ubx-data-live` on the PC for the manual Model B Excel
+workflow (`ImportSiTCalib`). Plain `rsync -a`, never `--delete` - the Pi is
+the source of truth, the NAS/Excel side only ever reads.
+
+**Trigger is a `systemd.path` unit (`nas-sync.path`), not a timer** —
+it fires `nas-sync.service` whenever `~/parsed_records.csv` actually
+changes (i.e. right after `parse_sit.regenerate()` runs, every real capture
+completion). This was a deliberate choice over computing a fixed
+clock-time from the target TOW: the target TOW changes across calibration
+epochs (manual re-entry, power-loss recalc), which would silently drift a
+once-computed schedule — watching the file itself is correct for any TOW,
+forever, with nothing to recompute.
+
+`nas-sync.sh` retries the push 3 times (backoff) before giving up, then
+sends a **non-urgent** alert email (same `ALERT_RECIPIENT=root`/msmtp
+pattern as the rest of this manual) - failure log at
+`~/nas-sync_mail-failures.log`.
+
+Install/verify via `../ubx-data/reinstall.sh` (calls
+`nas-sync/install-nas-sync.sh` as one of its stages) or run that script
+directly. Same verify-only boundary as msmtp: the mount/credentials
+themselves are restored by the user via
+`~/staging/samba/install-samba-files.sh` (fill in the real password in
+`~/staging/samba/etc/cifs-credentials-nas` first) - `install-nas-sync.sh`
+never installs `cifs-utils` or writes `/etc/fstab`/credentials itself, it
+only verifies the mount and installs the systemd units.
+
 ## Operations
 
 - **Quick Go/No-go check**: `~/bin/sit-status.sh` (see
@@ -211,3 +246,4 @@ starts counting from zero - no `--force` needed. See project memory
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
 | `../env-setup.sh` | (Re)creates the shared venv (`../env/`) - stdlib `python3 -m venv --system-site-packages`, PEP-668-safe |
 | `../reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
+| `../nas-sync/` | Pushes calibration files to the Synology NAS, triggered by `nas-sync.path` on `parsed_records.csv` changes - see [NAS sync](#5-nas-sync-calibration-files--synology) above |
