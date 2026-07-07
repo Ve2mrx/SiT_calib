@@ -31,7 +31,17 @@ systemd/email setup change.
 
 - Raspberry Pi (or similar) with:
   - A u-blox GNSS receiver on `/dev/ttyS0`
-  - SiT5721 GPSDO on I2C bus 0, address `0x60`
+  - SiT5721 GPSDO on I2C bus 0, address `0x60` — needs the `i2c-dev`
+    kernel module loaded (creates `/dev/i2c-0`) *and* persisted across
+    reboots. On a fresh Trixie image this is easy to miss if the I2C
+    buses were hand-added to `config.txt` (as on this hardware:
+    `i2c_vc`/`i2c5`/`i2c_csi_dsi`) rather than enabled through
+    `raspi-config`, since it's specifically `raspi-config`'s I2C toggle
+    that also arranges for `i2c-dev` to autoload
+    (`sudo raspi-config` → Interface Options → I2C → Enable). Symptom if
+    missed: `get-data.py`'s `smbus.SMBus(0)` (and `reinstall.sh`'s I2C
+    check) fail because `/dev/i2c-0` doesn't exist yet — see the
+    2026-07-06/07 incident below.
 - OS packages: `python3-venv`, `python3-smbus`, `screen`, `msmtp`, `msmtp-mta`
   (`apt install python3-venv python3-smbus screen msmtp msmtp-mta`)
 - `/etc/msmtprc` configured with a working SMTP account (this host uses a
@@ -146,8 +156,9 @@ waiting — this is intentional (see project memory
 ## 5. NAS sync (calibration files → Synology)
 
 `../ubx-data/nas-sync/` one-way pushes `~/parsed_records.csv`/`.json`,
-`~/SiT-calib_output.txt`, `~/SiT-calib_state.json`, the SiT5721 repo's
-`SiT-settings2.ini` (read-only reference), and any archived
+`~/SiT-calib_output.txt`, `~/SiT-calib_state.json`, `~/SiT-settings2.ini`
+(read-only reference; relocated 2026-07-07 from inside the SiT5721 repo
+to `$HOME` — see that project's manual), and any archived
 `~/SiT-calib_output_*.txt`/`~/SiT-calib_archive/` files to the Synology NAS
 (`nas-2.ve2mrx`, share `ubx-data-live`, mounted via CIFS at
 `/mnt/ubx-data-live`) — from there Synology Drive syncs it to
@@ -230,6 +241,55 @@ earlier, incompletely-processed boot is ignored and moved aside instead):
 record-count regression guard sees a fresh (nonexistent) file and simply
 starts counting from zero - no `--force` needed. See project memory
 `power-loss-mark-todo` for the full design rationale.
+
+## Known issues / troubleshooting log
+
+**2026-07-06/07 — capture chain down after the Trixie flash; initial
+"no TOW given" theory was wrong.** `restart-calib.service` failed at
+boot (`SiT-calib screen failed to start!`) during the Bookworm→Trixie
+migration. First hypothesis (from the user, and initially accepted
+here) was that no TOW had been supplied yet. That doesn't hold up:
+`~/SiT-calib_state.json` was still well within its 24h freshness window
+at that boot, so `start-get-data.sh` would have auto-resumed from it
+without ever reaching the interactive `read -p "Enter TOW:"` prompt —
+and `~/SiT-calib_mail-failures.log` has zero entries from around that
+boot, which is where the urgent pre-prompt alert (see
+`restart-calib-manual-tow` in project memory) would have logged a
+retry/failure. So the interactive-prompt path was never hit at all.
+
+Actual root cause: **`i2c-dev` wasn't loaded yet** at that boot (the
+prerequisite above wasn't satisfied until `raspi-config`'s I2C toggle was
+run later that same session) — `get-data.py`'s `bus = smbus.SMBus(0)`
+call fails immediately with no `/dev/i2c-0` to open, killing the screen
+near-instantly, well before any TOW logic or mail-sending code runs.
+This was the same underlying cause as `reinstall.sh` separately reporting
+`FAIL SiT5721 not responding on I2C bus 0 (0x60)` that same session — one
+root cause, two symptoms. Resolved once `i2c-dev` was persisted via
+`raspi-config`; should not recur on future boots since it's now in
+`/etc/modules`.
+
+Recovery used at the time: `screen -X -S SiT-calib quit` to clear the
+dead session, then `./set-calib-screen.sh <TOW>` with a freshly
+hand-computed TOW (see `gps-tow-to-utc` in project memory for the
+reverse direction — converting a target wall-clock time *to* a TOW is
+the same GPS-epoch/leap-second math run forwards).
+
+**Same session — `SCRIPT_DIR` broke when invoked via its `~/bin/`
+symlink.** `start-get-data.sh`, `set-calib-screen.sh`, and
+`restart-calib.sh` all derived their own directory with
+`dirname -- "$0"`, which doesn't resolve symlinks. Running
+`~/bin/start-get-data.sh` directly (rather than the real path) made
+`SCRIPT_DIR` resolve to `~/bin` instead of `mbt-ubx-apps/`, so it went
+looking for `~/bin/../env/bin/activate` and `~/bin/get-data.py` — neither
+exists there. `set-calib-screen.sh`/`restart-calib.sh` had the identical
+fragile idiom but hadn't actually broken yet, only because every sibling
+file they reference happens to also have a matching `~/bin` symlink (by
+coincidence, not by design). `restart-calib.service` itself was never
+exposed to this — its `ExecStart=` uses the real absolute path, not a
+symlink. Fixed in all three (plus SiT5721's `restart-SiT5721-pull.sh`,
+same idiom, same coincidental luck) by resolving `$0` through
+`readlink -f` before taking `dirname` of it. Commit `49c1f28` (this
+repo), `67c225f` (SiT5721).
 
 ## Key files/paths
 
