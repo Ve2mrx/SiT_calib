@@ -21,7 +21,7 @@
 # The SiT5721 Pull Value restore is done separately at reboot via
 # restart-SiT5721-pull.sh (in the SiT5721 project).
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
 
 python3 "$SCRIPT_DIR/check-SiT5721-defaults.py"
 status=$?

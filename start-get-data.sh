@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "$@"
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
 
 source "$SCRIPT_DIR/../env/bin/activate"
 

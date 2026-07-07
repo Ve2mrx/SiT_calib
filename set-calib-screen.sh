@@ -1,5 +1,5 @@
 #!/bin/sh
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
 
 if screen -list | grep -qE '\.SiT-calib[[:space:]]'; then
 	echo "A SiT-calib screen session is already running." >&2
