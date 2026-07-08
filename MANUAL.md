@@ -242,6 +242,15 @@ record-count regression guard sees a fresh (nonexistent) file and simply
 starts counting from zero - no `--force` needed. See project memory
 `power-loss-mark-todo` for the full design rationale.
 
+**Verified live 2026-07-06/07**: the Trixie reflash genuinely power-cycled
+the SiT5721, and this exact chain ran for real - `~/SiT-calib_archive/`
+holds the matching `SiT-power-loss-mark_2026-07-07T021006.json`,
+`SiT-calib_output_2026-07-07T021006.txt`, and `parsed_records_*` archive
+set, and the new `~/SiT-calib_output.txt` opens with the expected
+recalibration header. See SiT5721's `MANUAL.md` "Known issues" for the
+full writeup (that event's confirmation email failed to send, unrelated
+first-boot msmtprc timing, since fixed - not a bug in this logic).
+
 ## Known issues / troubleshooting log
 
 **2026-07-06/07 — capture chain down after the Trixie flash; initial
