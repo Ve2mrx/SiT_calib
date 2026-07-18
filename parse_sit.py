@@ -52,6 +52,45 @@ fix in the raw log text - parse()/CSV_FIELDS never captured freqOffset/
 freqUnc (only phase_ns), so parsed_records.json/.csv and anything built
 from them are unaffected; only raw SiT-calib_output.txt/archived copies
 from before this date show the old "ns" mislabel on those two lines.
+
+CSV record + reference-quality fields (2026-07-18): get-data.py now embeds
+a machine-parseable `CSV,<version>,...` line in every block of
+SiT-calib_output.txt (see its build_csv_line()), in addition to - not
+replacing - the human summary line described above. `parse()` tries
+`parse_csv_line()` first: when a block has a CSV line, it is the *sole*
+source for every field of that block (no mixing with SUMMARY_RE/legacy
+regex groups). When absent (any block predating this change), parsing
+falls back unchanged to SUMMARY_RE/UTC_RE/PULL_RE/AGING_RE.
+
+Four new GNSS-reference-quality fields ride along, appended to
+`CSV_FIELDS` after `total_log` per the field-position contract above:
+`phase_unc_ns`/`freq_unc_ps_s` (TIM-SMEAS phase/freq uncertainty),
+`time_acc_ns` (TIM-TOS GNSS time uncertainty - the reference side, unlike
+the SiT status which is oscillator-side only), and `sv_count` (NAV-PVT SV
+count, best-effort - may be empty even in a CSV-line block if NAV-PVT
+hadn't arrived recently enough when the snapshot was taken). For blocks
+with no CSV line: `phase_unc_ns`/`freq_unc_ps_s` still backfill via
+`SMEAS_UNC_RE` (that text already existed, unparsed, in every historic
+entry); `time_acc_ns`/`sv_count` can't backfill and come back empty -
+TIM-TOS never printed a GNSS-uncertainty field and NAV-PVT never existed
+as a source before this change.
+
+The one-line summary format described at the top of this docstring is now
+**DEPRECATED and frozen** - no new fields are ever added to it again.
+Once there's enough production history on the CSV-line format to trust it
+(a handful of daily cycles), the plan is to: drop the summary-line print
+from get-data.py, switch this file's block-boundary detection from
+SUMMARY_RE to the CSV,<version>,... line itself, and retire
+SUMMARY_RE/UTC_RE/PULL_RE/AGING_RE from live parsing entirely (kept only
+if re-parsing pre-CSV-line archives is ever needed). Not done yet because
+pulling the summary line now would break parsing of every block that
+predates the CSV line.
+
+Versioning: get-data.py's `CSV_LINE_VERSION` must match a
+`CSV_LINE_FIELDS_V<N>` branch in `parse_csv_line()` below - bump the
+version and add a new branch together whenever the CSV line's field list
+changes. An unrecognized version falls through to the legacy (non-CSV-line)
+parsing path rather than crashing.
 """
 
 import io
@@ -63,6 +102,19 @@ import json
 import struct
 import tempfile
 from datetime import datetime
+
+
+def _read_version() -> str:
+    """Reads the sibling VERSION file (repo root); "unknown" if missing."""
+    version_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+    try:
+        with open(version_path) as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
+__version__ = _read_version()
 
 
 def atomic_write_text(path, text, newline=None):
@@ -83,11 +135,14 @@ def atomic_write_text(path, text, newline=None):
 
 # pull_ppm / aging_pps / total_ppm hold the SiT5721 register values recovered to
 # FULL float32 register precision (the log rounds them). pull_log8g / aging_log8g /
-# total_log keep the raw log values for reference. total_log is appended last so
-# the macro's field positions (dow_fr at index 14) are unchanged.
+# total_log keep the raw log values for reference. dow_fr (index 14) and
+# total_log (index 15) are the macro's fixed field positions - never move or
+# insert before them. New fields always append after total_log, as done here
+# for the four GNSS-reference-quality fields (see module docstring).
 CSV_FIELDS = ["idx", "date", "time", "wno", "itow", "phase_ns",
               "total_ppm", "pull_ppm", "aging_pps", "retune", "flags", "status",
-              "pull_log8g", "aging_log8g", "dow_fr", "total_log"]
+              "pull_log8g", "aging_log8g", "dow_fr", "total_log",
+              "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count"]
 
 # French weekday names, indexed by datetime.weekday() (Mon=0 .. Sun=6).
 # Row 14 ("Day of week") in Calc-new uses these.
@@ -125,6 +180,10 @@ def aging_full(pps_8g):
     return f32(pps_8g)
 
 # --- regexes -----------------------------------------------------------------
+# DEPRECATED, legacy fallback only (see module docstring): SUMMARY_RE still
+# fires unconditionally to detect a block boundary, but its captured groups
+# are only used - along with UTC_RE/PULL_RE/AGING_RE - when a block has no
+# CSV,<version>,... line (i.e. it predates this change).
 SUMMARY_RE = re.compile(
     r"^\s*(?P<wno>\d+)\s*,"
     r"\s*(?P<itow>\d+)\s*,"
@@ -137,6 +196,54 @@ UTC_RE   = re.compile(r"TIM-TOS\s+UTC\s+(\d{4}-\d{2}-\d{2}),\s*([0-9:]+)\+?\S*")
 PULL_RE  = re.compile(r"SiT Pull Value\s+([-+]?[\d.eE+-]+)\s*ppm")
 AGING_RE = re.compile(r"SiT Aging compensation\s+([-+]?[\d.eE+-]+)\s*part/s")
 TOS_RE   = re.compile(r"TIM-TOS\s+week, TOW, system\s+(\d+)\s*,\s*(\d+)")
+
+# Legacy-only backfill: matches get-data.py's pre-CSV-line "TIM-SMEAS phase
+# uncertainty: ... ns, freq uncertainty: ... ps/s" line, which already
+# exists (unparsed until now) in every historic block. Not consulted once a
+# block has a CSV line.
+SMEAS_UNC_RE = re.compile(
+    r"TIM-SMEAS\s+phase uncertainty:\s*(?P<phase_unc>[-+]?\d+(?:\.\d+)?)\s*ns\s*,"
+    r"\s*freq uncertainty:\s*(?P<freq_unc>[-+]?\d+(?:\.\d+)?)\s*ps/s"
+)
+
+# The versioned machine-readable record - see get-data.py's build_csv_line().
+CSV_LINE_RE = re.compile(r"^CSV,(?P<version>\d+),(?P<rest>.*)$", re.MULTILINE)
+
+CSV_LINE_FIELDS_V1 = [
+    "date", "time", "wno", "itow", "phase_ns", "total_log",
+    "pull_log8g", "aging_log8g", "flags_freq", "flags_phase",
+    "status_error", "status_stability",
+    "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count",
+]
+
+
+def parse_csv_line(block):
+    """
+    Parses the versioned CSV,<version>,... record embedded in a block, if
+    present. Dispatches on version (only v1 exists today); an unrecognized
+    future version falls through to legacy parsing rather than crashing.
+
+    :param str block: joined verbose lines accumulated for one block
+
+    :return dict | None: {field_name: raw_str_value} from CSV_LINE_FIELDS_V1,
+        or None if the block has no CSV line or an unrecognized version
+    """
+    m = CSV_LINE_RE.search(block)
+    if not m:
+        return None
+    version = int(m.group("version"))
+    # elif version == 2: ... CSV_LINE_FIELDS_V2 ... is where a future field
+    # bump gets a branch (see module docstring's versioning note).
+    if version != 1:
+        return None
+    # csv.reader rather than a plain .split(",") - none of build_csv_line()'s
+    # fields currently embed a comma (numbers/enum strings only), but this
+    # stays correct if that ever changes, matching this file's CSV writer
+    # use elsewhere (regenerate()) instead of hand-rolled comma-joining.
+    row = next(csv.reader([m.group("rest")]))
+    if len(row) != len(CSV_LINE_FIELDS_V1):
+        return None
+    return dict(zip(CSV_LINE_FIELDS_V1, row))
 
 
 def parse(path):
@@ -152,32 +259,69 @@ def parse(path):
 
             # We hit a summary line -> close out this block.
             block = "\n".join(buf)
-            utc = UTC_RE.search(block)
-            pull = PULL_RE.search(block)
-            aging = AGING_RE.search(block)
+            csv_rec = parse_csv_line(block)
 
-            date = utc.group(1) if utc else None
-            time = utc.group(2) if utc else None
+            if csv_rec:
+                # CSV,<version>,... line present - sole source for every
+                # field of this block, no mixing with SUMMARY_RE/legacy
+                # regex groups even though they'd usually agree.
+                date = csv_rec["date"] or None
+                time = csv_rec["time"] or None
+                wno = int(csv_rec["wno"])
+                itow = float(csv_rec["itow"])
+                phase_ns = float(csv_rec["phase_ns"])
+                total_log = float(csv_rec["total_log"])
+                pull_8g = float(csv_rec["pull_log8g"]) if csv_rec["pull_log8g"] else None
+                aging_8g = float(csv_rec["aging_log8g"]) if csv_rec["aging_log8g"] else None
+                flags = f"freq: {csv_rec['flags_freq']}, phase: {csv_rec['flags_phase']}"
+                status = f"{csv_rec['status_error']}, {csv_rec['status_stability']}"
+                phase_unc_ns = float(csv_rec["phase_unc_ns"]) if csv_rec["phase_unc_ns"] else None
+                freq_unc_ps_s = float(csv_rec["freq_unc_ps_s"]) if csv_rec["freq_unc_ps_s"] else None
+                time_acc_ns = float(csv_rec["time_acc_ns"]) if csv_rec["time_acc_ns"] else None
+                sv_count = int(csv_rec["sv_count"]) if csv_rec["sv_count"] else None
+            else:
+                # No CSV line - block predates this change. Legacy
+                # extraction, unchanged, plus SMEAS_UNC_RE backfill for the
+                # two fields whose text already existed pre-change.
+                utc = UTC_RE.search(block)
+                pull = PULL_RE.search(block)
+                aging = AGING_RE.search(block)
+                smeas_unc = SMEAS_UNC_RE.search(block)
 
-            pull_8g = float(pull.group(1)) if pull else None
-            aging_8g = float(aging.group(1)) if aging else None
-            total_log = float(m.group("total"))                       # raw log total (10 sig figs)
+                date = utc.group(1) if utc else None
+                time = utc.group(2) if utc else None
+                wno = int(m.group("wno"))
+                itow = float(m.group("itow"))
+                phase_ns = float(m.group("phase"))
+                total_log = float(m.group("total"))
+                flags = m.group("flags").strip()
+                status = m.group("status").strip()
+                pull_8g = float(pull.group(1)) if pull else None
+                aging_8g = float(aging.group(1)) if aging else None
+                phase_unc_ns = float(smeas_unc.group("phase_unc")) if smeas_unc else None
+                freq_unc_ps_s = float(smeas_unc.group("freq_unc")) if smeas_unc else None
+                time_acc_ns = None    # TIM-TOS never printed this before the CSV line
+                sv_count = None       # NAV-PVT didn't exist as a source before the CSV line
 
             rec = {
-                "date":        date,                                   # calendar date (UTC)
-                "time":        time,
-                "wno":         int(m.group("wno")),                    # -> row 9 (WNO end, measured)
-                "itow":        float(m.group("itow")),                 # -> row 10 (iTOW end, measured)
-                "phase_ns":    float(m.group("phase")),                # -> row 11 (u-blox TIM-SMEAS ns)
-                "total_ppm":   pull_full_ppm(total_log),               # -> row 12, full f32 register value
-                "pull_ppm":    pull_full_ppm(pull_8g),                 # -> row 1 (re-tune only) full f32
-                "aging_pps":   aging_full(aging_8g),                   # -> row 2 (re-tune only) full f32
-                "pull_log8g":  pull_8g,                                # raw 8-sig-fig log value (reference)
-                "aging_log8g": aging_8g,
-                "dow_fr":      weekday_fr(date),                       # -> row 14 (Day of week, French)
-                "flags":       m.group("flags").strip(),
-                "status":      m.group("status").strip(),
-                "total_log":   total_log,                             # raw log total (reference)
+                "date":          date,                                 # calendar date (UTC)
+                "time":          time,
+                "wno":           wno,                                  # -> row 9 (WNO end, measured)
+                "itow":          itow,                                 # -> row 10 (iTOW end, measured)
+                "phase_ns":      phase_ns,                             # -> row 11 (u-blox TIM-SMEAS ns)
+                "total_ppm":     pull_full_ppm(total_log),             # -> row 12, full f32 register value
+                "pull_ppm":      pull_full_ppm(pull_8g),               # -> row 1 (re-tune only) full f32
+                "aging_pps":     aging_full(aging_8g),                 # -> row 2 (re-tune only) full f32
+                "pull_log8g":    pull_8g,                              # raw 8-sig-fig log value (reference)
+                "aging_log8g":   aging_8g,
+                "dow_fr":        weekday_fr(date),                     # -> row 14 (Day of week, French)
+                "flags":         flags,
+                "status":        status,
+                "total_log":     total_log,                           # raw log total (reference)
+                "phase_unc_ns":  phase_unc_ns,                        # TIM-SMEAS phase uncertainty (ns)
+                "freq_unc_ps_s": freq_unc_ps_s,                       # TIM-SMEAS freq uncertainty (ps/s)
+                "time_acc_ns":   time_acc_ns,                         # TIM-TOS GNSS time uncertainty (ns)
+                "sv_count":      sv_count,                            # NAV-PVT SV count (best-effort)
             }
             records.append(rec)
             buf = []  # reset for next block
@@ -242,7 +386,7 @@ def regenerate(path, verbose=True, force=False):
             )
 
     if verbose:
-        print(f"Parsed {len(recs)} daily records from {path}\n")
+        print(f"Parsed {len(recs)} daily records from {path} (parse_sit.py v{__version__})\n")
         hdr = f"{'#':>3} {'date':10} {'WNO':>5} {'iTOW':>8} {'phase_ns':>16} {'total_ppm':>14} {'pull_ppm':>14} {'aging_pps':>14} {'retune':>6}"
         print(hdr)
         print("-" * len(hdr))
@@ -286,6 +430,10 @@ def regenerate(path, verbose=True, force=False):
             ("" if r["aging_log8g"] is None else repr(r["aging_log8g"])),
             r["dow_fr"],
             repr(r["total_log"]),
+            ("" if r["phase_unc_ns"] is None else repr(r["phase_unc_ns"])),
+            ("" if r["freq_unc_ps_s"] is None else repr(r["freq_unc_ps_s"])),
+            ("" if r["time_acc_ns"] is None else repr(r["time_acc_ns"])),
+            ("" if r["sv_count"] is None else r["sv_count"]),
         ])
     atomic_write_text(os.path.join(out_dir, "parsed_records.csv"), csv_buf.getvalue(), newline="")
 

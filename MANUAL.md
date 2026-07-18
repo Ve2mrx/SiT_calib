@@ -1,9 +1,11 @@
 # mbt-ubx-apps — install & operations manual
 
-GPS time-transfer calibration capture: reads u-blox TIM-TOS/TIM-SMEAS/PUBX04
-messages from a GNSS receiver plus SiT5721 registers over I2C, and once per
-24h at a fixed GPS TOW, snapshots both to `~/SiT-calib_output.txt`. Runs
-continuously in a detached `screen` session named `SiT-calib`.
+GPS time-transfer calibration capture: reads u-blox TIM-TOS/TIM-SMEAS/PUBX04/
+NAV-PVT messages from a GNSS receiver plus SiT5721 registers over I2C, and
+once per 24h at a fixed GPS TOW, snapshots both to `~/SiT-calib_output.txt`
+(including GNSS-reference-quality fields - see
+[Reference-quality fields & the CSV record](#reference-quality-fields--the-csv-record)
+below). Runs continuously in a detached `screen` session named `SiT-calib`.
 
 After every daily snapshot, `get-data.py` also calls `parse_sit.py`'s
 `regenerate()` in-process to refresh `parsed_records.json`/`.csv` (the
@@ -251,7 +253,69 @@ recalibration header. See SiT5721's `MANUAL.md` "Known issues" for the
 full writeup (that event's confirmation email failed to send, unrelated
 first-boot msmtprc timing, since fixed - not a bug in this logic).
 
+## Reference-quality fields & the CSV record
+
+**Added 2026-07-18.** The SiT `good, stabilized` status is oscillator-side
+only - it says nothing about whether the GNSS reference itself was
+degraded at capture time (e.g. ionospheric scintillation during a
+geomagnetic storm; a real ~0.4 ppb storm-aligned excursion was found in
+the 60328 cycle). Each block in `~/SiT-calib_output.txt` now also carries:
+
+- **`phase_unc_ns` / `freq_unc_ps_s`** - TIM-SMEAS phase/freq uncertainty.
+  Primary signal: ships in the same message as the phase reading, inflates
+  during scintillation.
+- **`time_acc_ns`** - TIM-TOS's own `gnssUncertainty` field (the
+  GNSS-reference-side time uncertainty - not NAV-PVT's `tAcc`, which mixes
+  in receiver clock/position-solution quality). Corroborating signal.
+- **`sv_count`** - NAV-PVT SV count, best-effort (see below). Coarse
+  sanity flag only - only trips on severe loss-of-lock, not the sub-ppb
+  scintillation the other two fields are meant to catch.
+
+These are written as a versioned, machine-parseable `CSV,<version>,...`
+line per block, alongside (not replacing) the original human-readable
+one-line summary - which is now **frozen/deprecated**: no new fields ever
+go there again, and it's slated for eventual removal once the CSV-line
+format has enough production history behind it. Full design rationale,
+the field list, and the versioning convention (how to add a field later)
+are documented in `parse_sit.py`'s module docstring - read that before
+touching either the log format or `parse()`.
+
+**NAV-PVT enablement**: unlike TIM-TOS/TIM-SMEAS/PUBX04 (already flowing
+from this receiver's own persisted config, set up outside this repo),
+NAV-PVT is not normally requested. `get-data.py` self-heals this: it waits
+`MESSAGE_GRACE_PERIOD_S` (15s) after startup, and only for whichever of
+the four required messages genuinely never showed up, sends a one-shot
+legacy `CFG-MSG` enable (not `CFG-VALSET` - see the Known-issues entry
+below for why). In normal operation this fires for NAV-PVT only. If you
+ever see `WARNING: <name> not observed within 15.0s, requesting it via
+CFG-MSG` in the screen output for TIM-TOS/TIM-SMEAS/PUBX04, something is
+actually wrong with the receiver/link, not just a cold start.
+
+`sv_count` can legitimately be empty even in a fresh capture: it's
+best-effort (never gates the once-daily capture) and additionally treated
+as stale/unavailable if the last NAV-PVT is more than `NAV_PVT_STALE_S`
+(5s) old at snapshot time.
+
 ## Known issues / troubleshooting log
+
+**2026-07-18 — `enable_ubx()` uses CFG-VALSET, which this receiver doesn't
+support; likely inert since day one.** While adding NAV-PVT support (see
+"Reference-quality fields" above), discovered that `get-data.py`'s
+existing `enable_ubx()` sends its config via `UBXMessage.config_set()` -
+i.e. **CFG-VALSET**, u-blox's gen-9+ (M9/F9) configuration interface. This
+receiver is a **LEA-M8F**, which predates gen-9 and does not support
+CFG-VALSET at all. That call is also already hardcoded to a no-op
+(`enableubx=False` in `main`) regardless, so this was never actually
+exercised either way. Corroborated independently by
+`~/project/ublox-config-backup/` (a separate config backup/restore tool
+for these exact receivers, on this same machine), whose own docs state
+the identical fact about M8 parts. Not fixed as part of the NAV-PVT work
+(out of scope, `enable_ubx()` untouched) - if it's ever revived, it needs
+the legacy `CFG-MSG` mechanism instead, same as the new
+`GNSSSkeletonApp.enable_message()`. See `ublox-config-backup`'s own docs
+if a real, persisted (Flash-layer) golden config for this LEA-M8F is ever
+wanted - it's the right tool for that, just not stood up yet for this
+unit.
 
 **2026-07-06/07 — capture chain down after the Trixie flash; initial
 "no TOW given" theory was wrong.** `restart-calib.service` failed at
@@ -311,6 +375,7 @@ repo), `67c225f` (SiT5721).
 | `~/SiT-calib_archive/` | Pre-power-loss `SiT-calib_output_*.txt`/`parsed_records_*.json`/`.csv`/mark file, archived by `restart-calib.sh` |
 | `~/SiT-power-loss-mark.json` | Written by SiT5721's `restart-SiT5721.py`, consumed (renamed away) by `restart-calib.sh` |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with SiT5721) - `SiT5721` I2C class |
+| `VERSION` | Plain-text app version (e.g. `0.1.0`), read by both scripts at startup and shown in `get-data.py`'s banner / `parse_sit.py`'s verbose header |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
 | `../env-setup.sh` | (Re)creates the shared venv (`../env/`) - stdlib `python3 -m venv --system-site-packages`, PEP-668-safe |

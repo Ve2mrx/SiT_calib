@@ -1,13 +1,20 @@
 """
 SiT5721 GPSDO calibration capture tool.
 
-Reads u-blox TIM-TOS/TIM-SMEAS/PUBX04 messages from a GNSS receiver and
-pull_value/aging_compensation/uptime/status from a SiT5721 connected
-over I2C. Given a target GPS TOW (-W), waits for it and then snapshots
-both to screen and, if -O is given, to file; with -i, repeats every
-`interval` seconds after that, looping across GPS week boundaries. The
-TOW being waited for can be persisted/resumed across restarts with -S,
-so a reboot doesn't need it re-entered by hand.
+Reads u-blox TIM-TOS/TIM-SMEAS/PUBX04/NAV-PVT messages from a GNSS
+receiver and pull_value/aging_compensation/uptime/status from a SiT5721
+connected over I2C. Given a target GPS TOW (-W), waits for it and then
+snapshots both to screen and, if -O is given, to file; with -i, repeats
+every `interval` seconds after that, looping across GPS week boundaries.
+The TOW being waited for can be persisted/resumed across restarts with
+-S, so a reboot doesn't need it re-entered by hand.
+
+The file snapshot also includes GNSS-reference-quality fields (TIM-SMEAS
+phase/freq uncertainty, TIM-TOS GNSS time uncertainty, NAV-PVT SV count -
+the latter best-effort) as a versioned CSV,<version>,... record, so
+degraded captures (e.g. ionospheric scintillation) can be flagged from the
+reference side - the SiT status alone only reflects the oscillator side.
+See build_csv_line() and parse_sit.py's module docstring.
 
 Run with -h for the full list of command-line options.
 
@@ -37,10 +44,23 @@ import sys
 # mbt_SiT5721_lib lives in the lib/mbt-SiT5721-lib submodule, shared with SiT5721
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "mbt-SiT5721-lib"))
 
+
+def _read_version() -> str:
+    """Reads the sibling VERSION file (repo root); "unknown" if missing."""
+    version_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+    try:
+        with open(version_path) as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
+__version__ = _read_version()
+
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser, ArgumentTypeError
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
-from time import sleep
+from time import monotonic, sleep
 
 from pynmeagps import NMEAMessageError, NMEAParseError
 from pyrtcm import RTCMMessage, RTCMMessageError, RTCMParseError
@@ -49,6 +69,7 @@ from serial import Serial
 from pyubx2 import (
     NMEA_PROTOCOL,
     UBX_PROTOCOL,
+    SET,
     UBXMessage,
     UBXMessageError,
     UBXParseError,
@@ -67,6 +88,29 @@ import json
 CONNECTED = 1
 
 GPSWEEK_SECONDS = (7 * 24 * 60 * 60)  # 7 days * 24h * 60m * 60s
+
+# (msgClass, msgID) for every message this capture loop depends on. Used by
+# the observe-then-fix check in __main__: a message not seen within
+# MESSAGE_GRACE_PERIOD_S of startup gets an explicit CFG-MSG enable (legacy
+# mechanism - this is an M8-class (LEA-M8F) receiver, which predates and
+# doesn't support the CFG-VALSET interface enable_ubx() uses above).
+REQUIRED_MESSAGES = {
+    "TIM-TOS": (0x0D, 0x12),
+    "TIM-SMEAS": (0x0D, 0x13),
+    "PUBX04": (0xF1, 0x04),
+    "NAV-PVT": (0x01, 0x07),
+}
+MESSAGE_GRACE_PERIOD_S = 15.0  # several nav-solution cycles
+
+# NAV-PVT (SV count) is best-effort and not part of the strict data_valid
+# gate - a value older than this is treated as unavailable rather than
+# shown stale.
+NAV_PVT_STALE_S = 5.0
+
+# Bump when the CSV,<version>,... record's field list changes; add a new
+# CSV_LINE_FIELDS_V<N> branch in parse_sit.py's parse_csv_line() to match.
+# See that file's module docstring for the full versioning convention.
+CSV_LINE_VERSION = 1
 
 
 class GNSSSkeletonApp:
@@ -194,8 +238,17 @@ class GNSSSkeletonApp:
                                         parsed_data, data)
 
                                     nty = f", utcWk={data['PUBX04.utcWk']}, utcTow={data['PUBX04.utcTow']}, leapSec={data['PUBX04.leapSec']}"
+
+                                elif parsed_data.identity == "NAV-PVT":
+                                    data = get_ubx_NAV_PVT_data(
+                                        parsed_data, data)
+
+                                    nty = f", numSV={data['NAV-PVT.numSV']}"
                                 else:
                                     continue
+
+                                if parsed_data.identity in REQUIRED_MESSAGES:
+                                    data[f"_seen.{parsed_data.identity}"] = monotonic()
 
                             print(f"GNSS>> {parsed_data.identity}{nty}")
 
@@ -296,6 +349,28 @@ class GNSSSkeletonApp:
             cfg_data.append((f"CFG_MSGOUT_UBX_RXM_RTCM_{port_type}", enable))
 
         msg = UBXMessage.config_set(layers, transaction, cfg_data)
+        self.sendqueue.put((msg.serialize(), msg))
+
+    def enable_message(self, msgClass: int, msgID: int, rate: int = 1):
+        """
+        Request output of a single UBX/NMEA message via the legacy CFG-MSG
+        mechanism - works on this M8-class (LEA-M8F) receiver, unlike
+        CFG-VALSET (see enable_ubx() above, which this receiver appears to
+        silently ignore). Idempotent: setting an already-enabled message's
+        rate to the same value is a no-op on the receiver. RAM-layer only
+        (no CFG-CFG save) - re-sent from scratch on every process start,
+        which is by design: see the observe-then-fix check in __main__.
+
+        :param int msgClass: UBX message class, or 0xF1 for NMEA-proprietary
+        :param int msgID: UBX message ID
+        :param int rate: output rate in messages per navigation solution
+        """
+
+        msg = UBXMessage(
+            "CFG", "CFG-MSG", SET,
+            msgClass=msgClass, msgID=msgID,
+            rateUART1=rate, rateUSB=rate,
+        )
         self.sendqueue.put((msg.serialize(), msg))
 
     def get_coordinates(self) -> tuple:
@@ -410,6 +485,11 @@ def get_ubx_TIM_TOS_data(parsed_data: object, data: dict):
         tzinfo=timezone.utc
     )
 
+    # GNSS-reference-side time uncertainty (ns) - unlike the SiT status,
+    # this reflects the *reference*'s quality, not the oscillator's. Always
+    # present when this function runs (TIM-TOS is strictly gated).
+    data['TIM-TOS.gnssUncertainty'] = int(parsed_data.gnssUncertainty)
+
     data['TIM_TOS.data_valid'] = True
 
     return data
@@ -479,6 +559,62 @@ def get_nmea_PUBX04(parsed_data: object, data: dict):
     data['PUBX04.data_valid'] = True
 
     return data
+
+
+def get_ubx_NAV_PVT_data(parsed_data: object, data: dict):
+    """
+    Get uBlox NAV-PVT SV count (best-effort reference-quality field).
+
+    Unlike the other get_ubx_*/get_nmea_* functions, this is not gated by
+    reset_data_valid()/the strict data_valid AND-check: NAV-PVT enablement
+    on this receiver is a defensive fallback (see enable_message() and the
+    observe-then-fix check in __main__), so capture must never stall
+    waiting for it. Always overwrites with the latest value; nav_pvt_display()
+    is what decides whether that value is still fresh enough to report.
+
+    :param object UBXReader parsed_data: data to fetch values from
+    :param dict data: name of dict to store the extracted data
+
+    :return dict: Modified data dict
+    """
+
+    data['NAV-PVT.numSV'] = int(parsed_data.numSV)
+    data['NAV-PVT.received_at'] = monotonic()
+
+    return data
+
+
+def nav_pvt_display(data: dict):
+    """
+    Returns the most recent NAV-PVT SV count, or None if it's never
+    arrived or is older than NAV_PVT_STALE_S - so a best-effort field
+    never reports a stale value as current.
+
+    :param dict data: shared data dict
+
+    :return int | None: SV count, or None if unavailable/stale
+    """
+
+    received_at = data.get('NAV-PVT.received_at')
+    if received_at is None or (monotonic() - received_at) > NAV_PVT_STALE_S:
+        return None
+    return data['NAV-PVT.numSV']
+
+
+def fmt_or_na(value, suffix: str = "") -> str:
+    """
+    Formats a value for display, or "N/A" if it's None (used for
+    best-effort fields like NAV-PVT's SV count that may not have arrived).
+
+    :param value: value to format, or None
+    :param str suffix: optional unit suffix appended when value is present
+
+    :return str: formatted value+suffix, or "N/A"
+    """
+
+    if value is None:
+        return "N/A"
+    return f"{value}{(' ' + suffix) if suffix else ''}"
 
 
 def reset_data_valid(data: dict):
@@ -562,6 +698,105 @@ def flag_valid(flag: bool) -> str:
         return str(flag)
 
 
+def build_csv_line(data: dict) -> str:
+    """
+    Machine-parseable record embedded in SiT-calib_output.txt, versioned so
+    parse_sit.py can evolve the field set without breaking entries already
+    on disk (bump CSV_LINE_VERSION here and add a matching
+    CSV_LINE_FIELDS_V<N> branch in parse_sit.py's parse_csv_line()).
+
+    This is parse_sit.py's authoritative source going forward for every
+    field it carries - the verbose block around it is for human reading
+    only. See the deprecation note on the one-line summary below it.
+
+    :param dict data: name of dict holding the captured data
+
+    :return str: one CSV,<version>,... line (no trailing newline)
+    """
+
+    error_status_str = error_status(data['SiT.error_status_flag'])
+    stability_status_str = stability_status(data['SiT.stability_flag'])
+    sv_count = nav_pvt_display(data)
+
+    fields = [
+        str(data['TIM-TOS.utc.date']),
+        # HH:MM:SS only, no UTC offset - matches UTC_RE's legacy extraction
+        # (str() on a tz-aware time would append "+00:00", inconsistent
+        # with historic rows in the same CSV column).
+        data['TIM-TOS.utc.time'].strftime("%H:%M:%S"),
+        data['TIM-TOS.week'],
+        data['TIM-TOS.TOW'],
+        repr(data['TIM-SMEAS.phaseOffset']),
+        repr(data['SiT.total_offset_written'] / pow(10, -6)),
+        repr(data['SiT.pull_value'] / pow(10, -6)),
+        repr(data['SiT.aging_compensation']),
+        flag_valid(data['TIM-SMEAS.freqValid']),
+        flag_valid(data['TIM-SMEAS.phaseValid']),
+        error_status_str,
+        stability_status_str,
+        repr(data['TIM-SMEAS.phaseUnc']),
+        repr(data['TIM-SMEAS.freqUnc']),
+        data['TIM-TOS.gnssUncertainty'],
+        ("" if sv_count is None else sv_count),
+    ]
+    return f"CSV,{CSV_LINE_VERSION}," + ",".join(str(f) for f in fields)
+
+
+def _kv(label: str, value) -> str:
+    """One aligned 'label   value' line for the human-readable calib block."""
+
+    return f"{label:<32}{value}"
+
+
+def _format_calib_lines(data: dict) -> list:
+    """
+    Builds the human-readable per-cycle block (TIM-TOS through SiT totals)
+    as a list of lines, shared by printToFile_calib_data() and
+    printToScreen_calib_data() so file/screen output can't drift apart.
+    Purely cosmetic - parse_sit.py no longer keys on any of this text (see
+    build_csv_line() above), so this is free to be reformatted at will.
+
+    :param dict data: name of dict holding the captured data
+
+    :return list[str]: lines to print, in order (no trailing newlines)
+    """
+
+    error_status_str = error_status(data['SiT.error_status_flag'])
+    stability_status_str = stability_status(data['SiT.stability_flag'])
+
+    return [
+        "-" * 60,
+        _kv("TIM-TOS week/TOW/system",
+            f"{data['TIM-TOS.week']}, {data['TIM-TOS.TOW']}, {data['TIM-TOS.gnssId.str']}"),
+        _kv("TIM-TOS UTC",
+            f"{data['TIM-TOS.utc.date']}, {data['TIM-TOS.utc.time']}, {data['TIM-TOS.utcStandard.str']}"),
+        _kv("TIM-TOS GNSS time uncertainty", f"{data['TIM-TOS.gnssUncertainty']} ns"),
+        "",
+        _kv("TIM-SMEAS iTOW", f"{data['TIM-SMEAS.iTOW'] / 1000:.3f} s"),
+        _kv("TIM-SMEAS source", data['TIM-SMEAS.source']),
+        _kv("TIM-SMEAS flags",
+            f"freq={flag_valid(data['TIM-SMEAS.freqValid'])} phase={flag_valid(data['TIM-SMEAS.phaseValid'])}"),
+        _kv("TIM-SMEAS phase offset", f"{data['TIM-SMEAS.phaseOffset']:.3f} ns"),
+        _kv("TIM-SMEAS phase uncertainty", f"{data['TIM-SMEAS.phaseUnc']:.3f} ns"),
+        _kv("TIM-SMEAS freq offset", f"{data['TIM-SMEAS.freqOffset']:.3f} ps/s"),
+        _kv("TIM-SMEAS freq uncertainty", f"{data['TIM-SMEAS.freqUnc']:.3f} ps/s"),
+        "",
+        _kv("PUBX04 UTC week/TOW", f"{data['PUBX04.utcWk']}, {data['PUBX04.utcTow']:.2f}"),
+        _kv("PUBX04 leap sec", data['PUBX04.leapSec']),
+        "",
+        _kv("NAV-PVT SV count", fmt_or_na(nav_pvt_display(data))),
+        "",
+        _kv("SiT uptime", f"{data['SiT.uptime']} s ({timedelta(seconds=data['SiT.uptime'])})"),
+        _kv("SiT status", f"{error_status_str}, {stability_status_str}"),
+        _kv("SiT pull value", "{:+.8g} ppm".format(data['SiT.pull_value'] / pow(10, -6))),
+        _kv("SiT pull range", "{:.8g} ppm".format(data['SiT.pull_range'] / pow(10, -6))),
+        _kv("SiT aging compensation", "{:+.8g} part/s".format(data['SiT.aging_compensation'])),
+        _kv("SiT max freq ramp rate", "{:.8g} ppm".format(data['SiT.max_freq_ramp_rate'] / pow(10, -6))),
+        _kv("SiT total offset written", "{:+.8g} ppm".format(data['SiT.total_offset_written'] / pow(10, -6))),
+        "-" * 60,
+    ]
+
+
 def printToFile_calib_data(data: dict, file: str, TOW_selected: int):
     """
     Print to file the results of the data collection
@@ -580,45 +815,20 @@ def printToFile_calib_data(data: dict, file: str, TOW_selected: int):
     with open(file, "a") as f:
         print(
             f"...Waiting for TOW={TOW_selected:6d}, we're at {data['TIM-TOS.TOW']:6d}", file=f)
-        print("----------------------------------------", file=f)
-        print(
-            f"TIM-TOS  week, TOW, system  {data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-TOS.gnssId.str']}", file=f)
-        print(
-            f"TIM-TOS  UTC                {str(data['TIM-TOS.utc.date'])}, {str(data['TIM-TOS.utc.time'])}, {data['TIM-TOS.utcStandard.str']}", file=f)
+        for line in _format_calib_lines(data):
+            print(line, file=f)
         print(file=f)
 
-        print(
-            f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})", file=f)
-        print(
-            f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ps/s", file=f)
-        print(
-            f"TIM-SMEAS  phase uncertainty:      {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ps/s", file=f)
-        print(file=f)
+        print(build_csv_line(data), file=f)
 
-        print(
-            f"PUBX04  UTC week, TOW,      {data['PUBX04.utcWk']:4d}, {data['PUBX04.utcTow']:6.2f}, leapsec: {data['PUBX04.leapSec']}", file=f)
-        print(file=f)
-
-        print("SiT Uptime                {:8d}s, {}".format(
-            data['SiT.uptime'],
-            timedelta(seconds=data['SiT.uptime'])
-        ), file=f, end='\n')
-        print(file=f)
-
-        print(
-            f"SiT Error, Stability status flag      {error_status_str}, {stability_status_str}", file=f, end='\n')
-        print(
-            "SiT Pull Value             {:=+.8g} ppm".format(data['SiT.pull_value'] / pow(10, -6)), file=f, end='\n')
-        print("SiT Pull Range              {:=.8g} ppm".format(
-            data['SiT.pull_range'] / pow(10, -6)), file=f, end='\n')
-        print(
-            "SiT Aging compensation     {:=+.8g} part/s".format(data['SiT.aging_compensation']), file=f, end='\n')
-        print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
-            data['SiT.max_freq_ramp_rate'] / pow(10, -6)), file=f, end='\n')
-        print(file=f)
-        print("SiT Total offset written   {:=+.8g} ppm".format(
-            data['SiT.total_offset_written'] / pow(10, -6)), file=f, end='\n')
-        print("----------------------------------------", file=f)
+        # DEPRECATED, frozen: kept only for block-boundary detection
+        # (parse_sit.py's SUMMARY_RE) and backward compatibility with
+        # entries that predate the CSV,<version>,... line above - no new
+        # fields are ever added to this line again. Once there's enough
+        # production history on the CSV-line format, plan is to drop this
+        # print entirely and switch parse_sit.py's block-boundary
+        # detection to the CSV line itself - see that file's module
+        # docstring for the full removal plan.
         print(f"{data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-SMEAS.phaseOffset']:=12.3f}, {data['SiT.total_offset_written'] / pow(10, -6):=+3.10g}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])}), SiT status({error_status_str}, {stability_status_str})", file=f)
         print(file=f)
 
@@ -630,50 +840,8 @@ def printToScreen_calib_data(data: dict):
     :param dict data: name of dict to store the modified data
     """
 
-    error_status_str = error_status(
-        data['SiT.error_status_flag'])
-    stability_status_str = stability_status(
-        data['SiT.stability_flag'])
-
-    print("----------------------------------------")
-    print(
-        f"TIM-TOS  week, TOW, system  {data['TIM-TOS.week']:4d}, {data['TIM-TOS.TOW']:6d}, {data['TIM-TOS.gnssId.str']}")
-    print(
-        f"TIM-TOS  UTC                {str(data['TIM-TOS.utc.date'])}, {str(data['TIM-TOS.utc.time'])}, {data['TIM-TOS.utcStandard.str']}")
-    print()
-
-    print(
-        f"TIM-SMEAS  iTOW:                  {data['TIM-SMEAS.iTOW'] / 1000:=6.3f}, source {data['TIM-SMEAS.source']}, flags(freq: {flag_valid(data['TIM-SMEAS.freqValid'])}, phase: {flag_valid(data['TIM-SMEAS.phaseValid'])})")
-    print(
-        f"TIM-SMEAS  phase offset:      {data['TIM-SMEAS.phaseOffset']:=10.3f} ns, freq offset:      {data['TIM-SMEAS.freqOffset']:=10.3f} ps/s")
-    print(
-        f"TIM-SMEAS  phase uncertainty:     {data['TIM-SMEAS.phaseUnc']:=10.3f} ns, freq uncertainty: {data['TIM-SMEAS.freqUnc']:=10.3f} ps/s")
-    print()
-
-    print(
-        f"PUBX04  UTC week, TOW,      {data['PUBX04.utcWk']:4d}, {data['PUBX04.utcTow']:6.2f}, leapsec: {data['PUBX04.leapSec']}")
-    print()
-
-    print("SiT Uptime                {:8d}s, {}".format(
-        data['SiT.uptime'],
-        timedelta(seconds=data['SiT.uptime'])
-    ), end='\n')
-    print()
-
-    print(
-        f"SiT Error, Stability status flag      {error_status_str}, {stability_status_str}", end='\n')
-    print(
-        "SiT Pull Value             {:=+.8g} ppm".format(data['SiT.pull_value'] / pow(10, -6)), end='\n')
-    print("SiT Pull Range              {:=.8g} ppm".format(
-        data['SiT.pull_range'] / pow(10, -6)), end='\n')
-    print(
-        "SiT Aging compensation     {:=+.8g} part/s".format(data['SiT.aging_compensation']), end='\n')
-    print("SiT Max. Freq Ramp Rate     {:=.8g} ppm".format(
-        data['SiT.max_freq_ramp_rate'] / pow(10, -6)), end='\n')
-    print()
-    print("SiT Total offset written   {:=+3.10g} ppm".format(
-        data['SiT.total_offset_written'] / pow(10, -6)), end='\n')
-    print("----------------------------------------")
+    for line in _format_calib_lines(data):
+        print(line)
 
 
 def calcNextTOW(tow: int, interval: int):
@@ -849,10 +1017,15 @@ if __name__ == "__main__":
         'TIM_TOS.data_valid': False,
         'TIM-SMEAS.data_valid': False,
         'PUBX04.data_valid': False,
+        # Best-effort, not part of the data_valid gate - see nav_pvt_display().
+        'NAV-PVT.numSV': None,
+        'NAV-PVT.received_at': None,
     }
     data_lock = Lock()
     TOW_old = int(0)
     TOW_selected = int(args.WaitTOW)
+    process_start = monotonic()
+    messages_checked = False
 
     if args.WaitTOW is False and args.statefile:
         resumed_tow = load_tow_state(args.statefile)
@@ -865,7 +1038,7 @@ if __name__ == "__main__":
     weeks_crossed = 0
 
     try:
-        print("Starting GNSS reader/writer...\n")
+        print(f"Starting GNSS reader/writer... (get-data.py v{__version__})\n")
         print(f"args= {args}")
         with GNSSSkeletonApp(
             args.port,
@@ -888,6 +1061,23 @@ if __name__ == "__main__":
 
                 with data_lock:
                     snapshot = dict(data)
+
+                # One-shot, not a retry loop: give the receiver a grace
+                # period to prove each required message is already flowing
+                # (the normal case today - see REQUIRED_MESSAGES/enable_ubx()
+                # notes above), and only touch the receiver for whichever
+                # ones genuinely never showed up. If that CFG-MSG send also
+                # fails for some reason, we don't hammer the receiver again
+                # this run - the next process start (or the operator, from
+                # this warning) tries again.
+                if not messages_checked and (monotonic() - process_start) > MESSAGE_GRACE_PERIOD_S:
+                    messages_checked = True
+                    for name, (msgClass, msgID) in REQUIRED_MESSAGES.items():
+                        if f"_seen.{name}" not in snapshot:
+                            print(
+                                f"WARNING: {name} not observed within {MESSAGE_GRACE_PERIOD_S}s, "
+                                f"requesting it via CFG-MSG")
+                            gna.enable_message(msgClass, msgID)
 
                 if snapshot['TIM_TOS.data_valid']:
                     if args.WaitTOW is not False:
