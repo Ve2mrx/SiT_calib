@@ -104,7 +104,25 @@ else
 fi
 
 "$SCRIPT_DIR/set-calib-screen.sh"
-if ! screen -list | grep -qE '\.SiT-calib[[:space:]]'; then
+
+# `screen -d -m` forks and returns almost immediately, but under boot-time
+# I/O contention the session can take a moment to actually register in
+# `screen -list`. A false negative here is expensive, not just wrong:
+# restart-calib.service runs with the systemd default
+# KillMode=control-group, so treating this as a real failure (exit 1)
+# kills this whole cgroup - including a screen session that might have
+# registered a split second later - turning a transient race into a real
+# outage that sits dead until the next reboot or manual intervention (as
+# happened 2026-07-25). Poll briefly instead of checking once.
+screen_ok=0
+for _ in $(seq 1 15); do
+	if screen -list | grep -qE '\.SiT-calib[[:space:]]'; then
+		screen_ok=1
+		break
+	fi
+	sleep 0.2
+done
+if [ "$screen_ok" -ne 1 ]; then
 	echo "SiT-calib screen failed to start!" >&2
 	exit 1
 fi

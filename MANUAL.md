@@ -113,6 +113,19 @@ directive there too, or override the default:
 `ALERT_RECIPIENT="you@example.com" ./start-get-data.sh` (the env var is
 also how to redirect a test send without touching the real alias).
 
+`/etc/msmtprc` is (correctly) `600 root:root` - it holds a plaintext SMTP
+password. Since every alert-sending script here runs as `User=ve2mrx` (or
+interactively as `ve2mrx`), it can't read that file directly; a per-user
+`~/.msmtprc` (same account, `600 ve2mrx:ve2mrx`) is required too - msmtp
+checks `~/.msmtprc` before falling back to `/etc/msmtprc`. Both files are
+staged at `~/staging/msmtp/` (`etc/msmtprc`, `home_dir/.msmtprc`,
+`install-msmtp-files.sh`) - see that folder's `NOTES.md` for the full
+rationale and `LOCAL-LOG.md` for this machine's deployment history. Both
+staged files hardcode this host's `from` address (msmtp has no hostname
+macro), so if that staging folder is ever copied here from another
+machine, check/fix the `from` line before re-running the install script
+(missed once, 2026-07-25 - see the troubleshooting log below).
+
 Emails sent by this project:
 - **Normal priority**: reboot confirmation from `restart-calib.sh`, sent
   only when the previous TOW/state was fresh and reused automatically; or
@@ -140,6 +153,18 @@ Installs and enables:
   [Power-loss handling](#power-loss-handling) below).
 - `restart-calib-alert.service` — fires automatically via
   `restart-calib.service`'s `OnFailure=`; not started directly.
+
+`restart-calib.service` uses the systemd default `KillMode=control-group`,
+which matters here: `restart-calib.sh` launches the `SiT-calib` screen
+session as a *child* of this unit, in the same cgroup. If the unit fails
+for any reason, systemd tears down that whole cgroup as part of stopping
+it - killing the screen session too, even if it had only just started.
+`restart-calib.sh` therefore polls `screen -list` for up to ~3s (instead
+of checking once) before concluding the screen failed to start, so a
+session that's merely slow to register (boot-time I/O contention) isn't
+mistaken for a real failure and killed along with it. See the
+2026-07-25 troubleshooting log entry below for the incident that surfaced
+this.
 
 ## 4. First-time run (no prior state)
 
@@ -298,6 +323,36 @@ as stale/unavailable if the last NAV-PVT is more than `NAV_PVT_STALE_S`
 
 ## Known issues / troubleshooting log
 
+**2026-07-25 — `restart-calib.service` failed at boot
+("`SiT-calib screen failed to start!`"), and alert email was silently
+broken too.** `sit-status.sh` reported NO-GO after a boot: `restart-calib`
+had failed and the `SiT-calib` screen wasn't running at all.
+
+Root cause: `restart-calib.sh` checked `screen -list` exactly once, right
+after launching `set-calib-screen.sh`'s `screen -d -m ...`, which forks
+and returns before the new session is necessarily fully registered. Under
+boot-time contention that single check can lose the race and see nothing
+yet - and because `restart-calib.service` runs with the systemd default
+`KillMode=control-group`, treating that as a real failure (`exit 1`)
+killed the *entire cgroup*, including the screen session even if it
+registered a moment later. A transient race turned into a hard,
+until-next-reboot outage. Fixed by polling for up to ~3s before declaring
+failure (see [systemd services](#3-systemd-services-boot-time-automation)
+above). Verified both via `systemctl restart restart-calib.service` and a
+real reboot, both succeeding with the capture correctly resuming its
+in-progress TOW target.
+
+Separately, and independently: the boot-time failure's alert email never
+arrived, because `~/staging/msmtp/` had been copied to this machine
+(timecard-mini) from `rpi-ntp` wholesale, and both staged msmtp config
+files still had rpi-ntp's `from` address baked in (`etc/msmtprc` was also
+still an older, pre-cleanup version). Every alert send failed with
+`msmtp: account default not found: no configuration file available`.
+Fixed by correcting the `from` line in both staged files to this host's
+own address and re-running `install-msmtp-files.sh`; see that folder's
+`NOTES.md`/`LOCAL-LOG.md` for the full writeup. Confirmed fixed: the next
+boot's resume-confirmation email was received.
+
 **2026-07-18 — `enable_ubx()` uses CFG-VALSET, which this receiver doesn't
 support; likely inert since day one.** While adding NAV-PVT support (see
 "Reference-quality fields" above), discovered that `get-data.py`'s
@@ -378,6 +433,7 @@ repo), `67c225f` (SiT5721).
 | `VERSION` | Plain-text app version (e.g. `0.1.0`), read by both scripts at startup and shown in `get-data.py`'s banner / `parse_sit.py`'s verbose header |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
+| `~/.msmtprc` | Per-user msmtp config (fallback for `/etc/msmtprc` being `600 root:root`) - see [Alert email configuration](#2-alert-email-configuration) above |
 | `../env-setup.sh` | (Re)creates the shared venv (`../env/`) - stdlib `python3 -m venv --system-site-packages`, PEP-668-safe |
 | `../reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
 | `../nas-sync/` | Pushes calibration files to the Synology NAS, triggered by `nas-sync.path` on `parsed_records.csv` changes - see [NAS sync](#5-nas-sync-calibration-files--synology) above |
