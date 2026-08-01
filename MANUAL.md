@@ -343,7 +343,14 @@ supply sag). Seven more fields, appended at the end of the CSV line:
   one-line `/sys/class/thermal/thermal_zone0/temp` read). Proxy for
   enclosure-interior temperature, which is what the LEA-M8F sees - unlike
   the SiT5721, it is *not* temperature-compensated, so this is more
-  relevant to phase-measurement noise than room temperature is.
+  relevant to phase-measurement noise than room temperature is. Deliberately
+  sysfs, not `vcgencmd`: this runs on the daily capture path, and
+  `vcgencmd` is a subprocess (VideoCore mailbox call) that can block or
+  fail on a missing package/permissions - none of which may ever touch a
+  capture. SiT5721's `save-SiT5721.py` has its own copy of this function
+  that *does* use `vcgencmd` (the Pi-supported interface) - safe there
+  since that 10-min sampler is already best-effort. See
+  `ubx-data/claude-code-throttle-note.md`.
 
 All empty for any block parsed as V1 (or with no CSV line at all) - there
 is no back-fill, since none of these registers were ever read into the log

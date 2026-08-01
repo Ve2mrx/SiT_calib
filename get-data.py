@@ -635,6 +635,15 @@ def cm4_soc_temp_c():
     """
     CM4 SoC temperature in degrees C, or None if unavailable.
 
+    Deliberately a raw sysfs read, NOT `vcgencmd` - this runs on the daily
+    capture path, and `vcgencmd` is a subprocess talking to the VideoCore
+    mailbox that can block, fail on a missing package, or fail on
+    /dev/vcio permissions. None of that may ever touch a capture (see
+    claude-code-throttle-note.md). save-SiT5721.py's own copy of this
+    function, in the 10-min health sampler - NOT the capture path - does
+    use vcgencmd, since it's the Pi-supported interface and that sampler
+    can absorb a failure safely.
+
     Logged as a proxy for enclosure-interior temperature, which is what the
     LEA-M8F sees. The LEA-M8F is the one element of the measurement chain
     that is NOT temperature-compensated (the SiT5721 is oven-controlled),
