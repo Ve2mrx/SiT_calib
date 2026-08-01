@@ -91,6 +91,32 @@ Versioning: get-data.py's `CSV_LINE_VERSION` must match a
 version and add a new branch together whenever the CSV line's field list
 changes. An unrecognized version falls through to the legacy (non-CSV-line)
 parsing path rather than crashing.
+
+SiT health telemetry + CM4 SoC temp (2026-08-01, CSV_LINE_VERSION 2): the
+SiT "good, stabilized" status is oscillator-side only and doesn't reveal
+e.g. a drifting thermal control loop, so `get-data.py` now also reads and
+logs the SiT5721's own health registers (resonator temp, supply voltage,
+heater power + target, temp error - all already read by
+`read_SiT_operation()`, no new I2C work), CM4 SoC temperature (a proxy for
+enclosure-interior temperature, relevant to the LEA-M8F's own, uncompensated
+temperature sensitivity), and TIM-SMEAS `freqOffset` (an independent
+cross-check of the same quantity the phase chain computes - previously
+captured into the text log and then discarded at CSV time). `CSV_FIELDS`
+gained seven columns at the end to match: `freq_offset_ppb`,
+`resonator_temp_c`, `supply_v`, `heater_power_w`, `heater_power_target_w`,
+`temp_error_c`, `cm4_soc_temp_c`. For Cowork: these come back empty for any
+block parsed as V1 (or with no CSV line at all) - there is no back-fill,
+since none of these registers were ever read into the log before this
+change (`freqOffset` is the one partial exception - present in the raw
+text since 2026-07-19, but not yet wired into a back-fill regex here; see
+`claude-code-health-logging-patch.md` sec. 5b-bis if that's wanted later).
+
+Also note: TIM-SMEAS `freqOffset`/`freqUnc` are u-blox `2^-8 ppb`, scaled
+by pyubx2 - i.e. **ppb**, not `ps/s`/`ns` as get-data.py's human-readable
+block previously labeled them (fixed the same day as this CSV bump). The
+existing `freq_unc_ps_s` column name/values are unaffected (never wrong,
+only mislabeled at display time) - deliberately not renamed here, see that
+fix's own note in get-data.py.
 """
 
 import io
@@ -142,7 +168,13 @@ def atomic_write_text(path, text, newline=None):
 CSV_FIELDS = ["idx", "date", "time", "wno", "itow", "phase_ns",
               "total_ppm", "pull_ppm", "aging_pps", "retune", "flags", "status",
               "pull_log8g", "aging_log8g", "dow_fr", "total_log",
-              "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count"]
+              "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count",
+              # v2 additions (2026-08-01) - APPEND ONLY, ImportSiTCalib
+              # indexes this file. Empty for blocks parsed from a CSV,1,...
+              # line or no CSV line at all (see CSV_LINE_FIELDS_V2 below).
+              "freq_offset_ppb", "resonator_temp_c", "supply_v",
+              "heater_power_w", "heater_power_target_w", "temp_error_c",
+              "cm4_soc_temp_c"]
 
 # French weekday names, indexed by datetime.weekday() (Mon=0 .. Sun=6).
 # Row 14 ("Day of week") in Calc-new uses these.
@@ -216,34 +248,44 @@ CSV_LINE_FIELDS_V1 = [
     "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count",
 ]
 
+# v2 = v1 + appended SiT health telemetry, CM4 SoC temp, and TIM-SMEAS
+# freqOffset (2026-08-01). Append-only: see get-data.py's build_csv_line().
+CSV_LINE_FIELDS_V2 = CSV_LINE_FIELDS_V1 + [
+    "freq_offset_ppb", "resonator_temp_c", "supply_v",
+    "heater_power_w", "heater_power_target_w", "temp_error_c", "cm4_soc_temp_c",
+]
+
 
 def parse_csv_line(block):
     """
     Parses the versioned CSV,<version>,... record embedded in a block, if
-    present. Dispatches on version (only v1 exists today); an unrecognized
-    future version falls through to legacy parsing rather than crashing.
+    present. Dispatches on version (v1 or v2 today); an unrecognized future
+    version falls through to legacy parsing rather than crashing.
 
     :param str block: joined verbose lines accumulated for one block
 
-    :return dict | None: {field_name: raw_str_value} from CSV_LINE_FIELDS_V1,
-        or None if the block has no CSV line or an unrecognized version
+    :return dict | None: {field_name: raw_str_value} from CSV_LINE_FIELDS_V1
+        or CSV_LINE_FIELDS_V2 (matching the record's own version), or None
+        if the block has no CSV line or an unrecognized version
     """
     m = CSV_LINE_RE.search(block)
     if not m:
         return None
     version = int(m.group("version"))
-    # elif version == 2: ... CSV_LINE_FIELDS_V2 ... is where a future field
-    # bump gets a branch (see module docstring's versioning note).
-    if version != 1:
-        return None
+    if version == 1:
+        fields = CSV_LINE_FIELDS_V1
+    elif version == 2:
+        fields = CSV_LINE_FIELDS_V2
+    else:
+        return None      # unrecognized future version -> legacy path, never crash
     # csv.reader rather than a plain .split(",") - none of build_csv_line()'s
     # fields currently embed a comma (numbers/enum strings only), but this
     # stays correct if that ever changes, matching this file's CSV writer
     # use elsewhere (regenerate()) instead of hand-rolled comma-joining.
     row = next(csv.reader([m.group("rest")]))
-    if len(row) != len(CSV_LINE_FIELDS_V1):
+    if len(row) != len(fields):
         return None
-    return dict(zip(CSV_LINE_FIELDS_V1, row))
+    return dict(zip(fields, row))
 
 
 def parse(path):
@@ -279,6 +321,16 @@ def parse(path):
                 freq_unc_ps_s = float(csv_rec["freq_unc_ps_s"]) if csv_rec["freq_unc_ps_s"] else None
                 time_acc_ns = float(csv_rec["time_acc_ns"]) if csv_rec["time_acc_ns"] else None
                 sv_count = int(csv_rec["sv_count"]) if csv_rec["sv_count"] else None
+                # v2-only fields (see CSV_LINE_FIELDS_V2) - absent from a
+                # V1 csv_rec dict, hence .get() rather than [...]; a V1
+                # block simply has nothing to report for these yet.
+                freq_offset_ppb = float(csv_rec["freq_offset_ppb"]) if csv_rec.get("freq_offset_ppb") else None
+                resonator_temp_c = float(csv_rec["resonator_temp_c"]) if csv_rec.get("resonator_temp_c") else None
+                supply_v = float(csv_rec["supply_v"]) if csv_rec.get("supply_v") else None
+                heater_power_w = float(csv_rec["heater_power_w"]) if csv_rec.get("heater_power_w") else None
+                heater_power_target_w = float(csv_rec["heater_power_target_w"]) if csv_rec.get("heater_power_target_w") else None
+                temp_error_c = float(csv_rec["temp_error_c"]) if csv_rec.get("temp_error_c") else None
+                cm4_soc_temp_c = float(csv_rec["cm4_soc_temp_c"]) if csv_rec.get("cm4_soc_temp_c") else None
             else:
                 # No CSV line - block predates this change. Legacy
                 # extraction, unchanged, plus SMEAS_UNC_RE backfill for the
@@ -302,6 +354,13 @@ def parse(path):
                 freq_unc_ps_s = float(smeas_unc.group("freq_unc")) if smeas_unc else None
                 time_acc_ns = None    # TIM-TOS never printed this before the CSV line
                 sv_count = None       # NAV-PVT didn't exist as a source before the CSV line
+                freq_offset_ppb = None        # v2-only, see CSV_LINE_FIELDS_V2
+                resonator_temp_c = None
+                supply_v = None
+                heater_power_w = None
+                heater_power_target_w = None
+                temp_error_c = None
+                cm4_soc_temp_c = None
 
             rec = {
                 "date":          date,                                 # calendar date (UTC)
@@ -322,6 +381,13 @@ def parse(path):
                 "freq_unc_ps_s": freq_unc_ps_s,                       # TIM-SMEAS freq uncertainty (ps/s)
                 "time_acc_ns":   time_acc_ns,                         # TIM-TOS GNSS time uncertainty (ns)
                 "sv_count":      sv_count,                            # NAV-PVT SV count (best-effort)
+                "freq_offset_ppb":       freq_offset_ppb,             # TIM-SMEAS freq offset (ppb) - v2
+                "resonator_temp_c":      resonator_temp_c,            # SiT 0xA1 - v2
+                "supply_v":              supply_v,                   # SiT 0xA3 - v2
+                "heater_power_w":        heater_power_w,              # SiT 0xA7 - v2
+                "heater_power_target_w": heater_power_target_w,       # SiT 0xB1 - v2
+                "temp_error_c":          temp_error_c,                # SiT 0xB0 - v2
+                "cm4_soc_temp_c":        cm4_soc_temp_c,              # CM4 SoC temp (best-effort) - v2
             }
             records.append(rec)
             buf = []  # reset for next block
@@ -434,6 +500,13 @@ def regenerate(path, verbose=True, force=False):
             ("" if r["freq_unc_ps_s"] is None else repr(r["freq_unc_ps_s"])),
             ("" if r["time_acc_ns"] is None else repr(r["time_acc_ns"])),
             ("" if r["sv_count"] is None else r["sv_count"]),
+            ("" if r["freq_offset_ppb"] is None else repr(r["freq_offset_ppb"])),
+            ("" if r["resonator_temp_c"] is None else repr(r["resonator_temp_c"])),
+            ("" if r["supply_v"] is None else repr(r["supply_v"])),
+            ("" if r["heater_power_w"] is None else repr(r["heater_power_w"])),
+            ("" if r["heater_power_target_w"] is None else repr(r["heater_power_target_w"])),
+            ("" if r["temp_error_c"] is None else repr(r["temp_error_c"])),
+            ("" if r["cm4_soc_temp_c"] is None else repr(r["cm4_soc_temp_c"])),
         ])
     atomic_write_text(os.path.join(out_dir, "parsed_records.csv"), csv_buf.getvalue(), newline="")
 

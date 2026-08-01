@@ -321,6 +321,51 @@ best-effort (never gates the once-daily capture) and additionally treated
 as stale/unavailable if the last NAV-PVT is more than `NAV_PVT_STALE_S`
 (5s) old at snapshot time.
 
+**Added 2026-08-01 (CSV_LINE_VERSION 2)**: the SiT `good, stabilized`
+status is oscillator-side only in a second sense too - it doesn't reveal
+*why* the oven might be struggling (a drifting thermal control loop, a
+supply sag). Seven more fields, appended at the end of the CSV line:
+
+- **`freq_offset_ppb`** - TIM-SMEAS `freqOffset`, an independent
+  measurement of the same quantity the phase chain computes (verified to
+  track the phase-derived error 1:1 in ppb) - a free cross-check on the
+  whole chain. Previously captured into the text log and discarded at CSV
+  time.
+- **`resonator_temp_c`, `supply_v`, `heater_power_w`,
+  `heater_power_target_w`, `temp_error_c`** - SiT5721 registers `0xA1`,
+  `0xA3`, `0xA7`, `0xB1`, `0xB0`. Already read every cycle by
+  `read_SiT_operation()`, which `get_SiT_data()` now actually calls (it
+  previously only called `read_SiT_config()`/`read_SiT_dynamic()` -
+  `read_SiT_operation()` ran once at process start via
+  `SiT5721.__init__()`, so these values would otherwise have been frozen
+  at their startup reading for the life of the process).
+- **`cm4_soc_temp_c`** - CM4 SoC temperature (`cm4_soc_temp_c()`, a
+  one-line `/sys/class/thermal/thermal_zone0/temp` read). Proxy for
+  enclosure-interior temperature, which is what the LEA-M8F sees - unlike
+  the SiT5721, it is *not* temperature-compensated, so this is more
+  relevant to phase-measurement noise than room temperature is.
+
+All empty for any block parsed as V1 (or with no CSV line at all) - there
+is no back-fill, since none of these registers were ever read into the log
+before this change. Full rationale, the exact field order, and the
+versioning mechanics are in `parse_sit.py`'s module docstring (as with v1)
+and in `ubx-data/claude-code-health-logging-patch.md`.
+
+**Also fixed in the same pass**: `get-data.py`'s human-readable block
+labeled TIM-SMEAS `freqOffset`/`freqUnc` as `ps/s` - they're u-blox
+`2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x. The `CSV_FIELDS`
+column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
+`parse_sit.py`'s docstring); only the display label and the new
+`freq_offset_ppb` CSV column use the correct unit name.
+
+This is **Step 1** of a two-part health-telemetry effort (see the patch
+doc's staging notes); **Step 2** - a 144-sample/day health log written by
+SiT5721's `save-SiT5721.py` (every 10 min, riding the existing
+`save-sit5721.timer`, no new I2C traffic) - is documented in that repo's
+own `MANUAL.md`. `nas-sync.sh` was updated to push `~/sit-health.csv`
+best-effort (a missing file must not fail the whole sync - see that
+script's own comment).
+
 ## Known issues / troubleshooting log
 
 **2026-07-25 — `restart-calib.service` failed at boot

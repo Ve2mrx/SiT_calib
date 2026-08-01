@@ -14,7 +14,11 @@ phase/freq uncertainty, TIM-TOS GNSS time uncertainty, NAV-PVT SV count -
 the latter best-effort) as a versioned CSV,<version>,... record, so
 degraded captures (e.g. ionospheric scintillation) can be flagged from the
 reference side - the SiT status alone only reflects the oscillator side.
-See build_csv_line() and parse_sit.py's module docstring.
+Since v2 (2026-08-01), the same record also carries SiT5721 health
+telemetry (resonator temp, supply voltage, heater power/target, temp
+error) and CM4 SoC temp, since the SiT "good, stabilized" status is
+oscillator-side only and does not reveal e.g. a drifting thermal control
+loop. See build_csv_line() and parse_sit.py's module docstring.
 
 Run with -h for the full list of command-line options.
 
@@ -110,7 +114,10 @@ NAV_PVT_STALE_S = 5.0
 # Bump when the CSV,<version>,... record's field list changes; add a new
 # CSV_LINE_FIELDS_V<N> branch in parse_sit.py's parse_csv_line() to match.
 # See that file's module docstring for the full versioning convention.
-CSV_LINE_VERSION = 1
+# v2 (2026-08-01): appended SiT health telemetry (resonator temp, supply V,
+# heater power + target, temp error), CM4 SoC temp, and TIM-SMEAS freqOffset -
+# see claude-code-health-logging-patch.md.
+CSV_LINE_VERSION = 2
 
 
 class GNSSSkeletonApp:
@@ -414,6 +421,13 @@ def invalidate_SiT_data(data: dict):
     data['SiT.error_status_flag'] = None
     data['SiT.stability_flag'] = None
 
+    data['SiT.resonator_temp'] = None
+    data['SiT.supply_voltage'] = None
+    data['SiT.heater_power'] = None
+    data['SiT.heater_power_tgt'] = None
+    data['SiT.temp_error'] = None
+    data['CM4.soc_temp_c'] = None
+
     return data
 
 
@@ -428,6 +442,12 @@ def get_SiT_data(SiTdev: object, data: dict):
     """
 
     SiTdev.read_SiT_config()
+    # read_SiT_operation() is also called once by SiT5721.__init__(), but
+    # siTime is constructed once at process start - without calling it here
+    # too, temperature_float/supply_voltage_float/etc below would be frozen
+    # at their startup value for the life of the process instead of
+    # reflecting the current capture.
+    SiTdev.read_SiT_operation()
     SiTdev.read_SiT_dynamic()
 
     data['SiT.pull_value'] = float(SiTdev.pull_value)
@@ -438,6 +458,16 @@ def get_SiT_data(SiTdev: object, data: dict):
     data['SiT.total_offset_written'] = float(SiTdev.total_offset_written)
     data['SiT.error_status_flag'] = int(SiTdev.error_status_flag_uint)
     data['SiT.stability_flag'] = int(SiTdev.stability_flag_uint)
+
+    # Health telemetry (2026-08-01): not part of the SiT-side "good,
+    # stabilized" gate, but read alongside it since it's the same I2C
+    # device/cycle - see claude-code-health-logging-patch.md.
+    data['SiT.resonator_temp'] = float(SiTdev.temperature_float)
+    data['SiT.supply_voltage'] = float(SiTdev.supply_voltage_float)
+    data['SiT.heater_power'] = float(SiTdev.heater_power_float)
+    data['SiT.heater_power_tgt'] = float(SiTdev.heater_power_target_float)
+    data['SiT.temp_error'] = float(SiTdev.temperature_err_float)
+    data['CM4.soc_temp_c'] = cm4_soc_temp_c()
 
     data['SiT.data_valid'] = True
 
@@ -601,6 +631,27 @@ def nav_pvt_display(data: dict):
     return data['NAV-PVT.numSV']
 
 
+def cm4_soc_temp_c():
+    """
+    CM4 SoC temperature in degrees C, or None if unavailable.
+
+    Logged as a proxy for enclosure-interior temperature, which is what the
+    LEA-M8F sees. The LEA-M8F is the one element of the measurement chain
+    that is NOT temperature-compensated (the SiT5721 is oven-controlled),
+    so this is more relevant to phase-measurement noise than room
+    temperature is. Best-effort: never raises, so a sysfs change can't
+    break a capture.
+
+    :return float | None: SoC temperature in C, or None if unavailable
+    """
+
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as fh:
+            return int(fh.read().strip()) / 1000.0
+    except (OSError, ValueError):
+        return None
+
+
 def fmt_or_na(value, suffix: str = "") -> str:
     """
     Formats a value for display, or "N/A" if it's None (used for
@@ -738,6 +789,15 @@ def build_csv_line(data: dict) -> str:
         repr(data['TIM-SMEAS.freqUnc']),
         data['TIM-TOS.gnssUncertainty'],
         ("" if sv_count is None else sv_count),
+        # --- v2 additions: append-only. ImportSiTCalib reads this CSV by
+        # INDEX (f(1)..f(14)); inserting anywhere above silently corrupts it.
+        repr(data['TIM-SMEAS.freqOffset']),  # ppb (NOT ps/s - see _format_calib_lines())
+        repr(data['SiT.resonator_temp']),
+        repr(data['SiT.supply_voltage']),
+        repr(data['SiT.heater_power']),
+        repr(data['SiT.heater_power_tgt']),
+        repr(data['SiT.temp_error']),
+        ("" if data['CM4.soc_temp_c'] is None else repr(data['CM4.soc_temp_c'])),
     ]
     return f"CSV,{CSV_LINE_VERSION}," + ",".join(str(f) for f in fields)
 
@@ -778,8 +838,12 @@ def _format_calib_lines(data: dict) -> list:
             f"freq={flag_valid(data['TIM-SMEAS.freqValid'])} phase={flag_valid(data['TIM-SMEAS.phaseValid'])}"),
         _kv("TIM-SMEAS phase offset", f"{data['TIM-SMEAS.phaseOffset']:.3f} ns"),
         _kv("TIM-SMEAS phase uncertainty", f"{data['TIM-SMEAS.phaseUnc']:.3f} ns"),
-        _kv("TIM-SMEAS freq offset", f"{data['TIM-SMEAS.freqOffset']:.3f} ps/s"),
-        _kv("TIM-SMEAS freq uncertainty", f"{data['TIM-SMEAS.freqUnc']:.3f} ps/s"),
+        # u-blox TIM-SMEAS freqOffset/freqUnc are 2^-8 ppb and pyubx2 applies
+        # the scale, so these are ppb, not ps/s - the old label was wrong by
+        # 1000x. Verified: freqOffset tracks the phase-derived error 1:1 in
+        # ppb. See claude-code-health-logging-patch.md sec. 3.
+        _kv("TIM-SMEAS freq offset", f"{data['TIM-SMEAS.freqOffset']:.3f} ppb"),
+        _kv("TIM-SMEAS freq uncertainty", f"{data['TIM-SMEAS.freqUnc']:.3f} ppb"),
         "",
         _kv("PUBX04 UTC week/TOW", f"{data['PUBX04.utcWk']}, {data['PUBX04.utcTow']:.2f}"),
         _kv("PUBX04 leap sec", data['PUBX04.leapSec']),
@@ -793,6 +857,12 @@ def _format_calib_lines(data: dict) -> list:
         _kv("SiT aging compensation", "{:+.8g} part/s".format(data['SiT.aging_compensation'])),
         _kv("SiT max freq ramp rate", "{:.8g} ppm".format(data['SiT.max_freq_ramp_rate'] / pow(10, -6))),
         _kv("SiT total offset written", "{:+.8g} ppm".format(data['SiT.total_offset_written'] / pow(10, -6))),
+        _kv("SiT resonator temp", f"{data['SiT.resonator_temp']:.3f} C"),
+        _kv("SiT temp error", f"{data['SiT.temp_error']:+.4f} C"),
+        _kv("SiT heater power", f"{data['SiT.heater_power']:.4f} W "
+                                f"(target {data['SiT.heater_power_tgt']:.4f} W)"),
+        _kv("SiT supply voltage", f"{data['SiT.supply_voltage']:.4f} V"),
+        _kv("CM4 SoC temp", fmt_or_na(data['CM4.soc_temp_c'], "C")),
         "-" * 60,
     ]
 
