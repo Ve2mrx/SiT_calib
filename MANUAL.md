@@ -365,13 +365,26 @@ column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
 `parse_sit.py`'s docstring); only the display label and the new
 `freq_offset_ppb` CSV column use the correct unit name.
 
-This is **Step 1** of a two-part health-telemetry effort (see the patch
-doc's staging notes); **Step 2** - a 144-sample/day health log written by
+This is **Step 1** of a three-part health-telemetry effort (see the patch
+doc's staging notes). **Step 2** - a 144-sample/day health log written by
 SiT5721's `save-SiT5721.py` (every 10 min, riding the existing
-`save-sit5721.timer`, no new I2C traffic) - is documented in that repo's
-own `MANUAL.md`. `nas-sync.sh` was updated to push `~/sit-health.csv`
-best-effort (a missing file must not fail the whole sync - see that
-script's own comment).
+`save-sit5721.timer`, no new I2C traffic, plus CM4 SoC temp via
+`vcgencmd` there - deliberately *not* here, see `cm4_soc_temp_c()`'s own
+docstring) - and **Step 3** - trailing-24h statistics computed from that
+log - are both documented in that repo's own `MANUAL.md`, and both live
+since 2026-08-01. `nas-sync.sh` was updated to push `~/sit-health.csv`/
+`~/sit-health-24h.json` best-effort (a missing file must not fail the
+whole sync - see that script's own comment).
+
+**Status as of 2026-08-01**: this Step 1 code was restarted into the live
+capture the same day (`systemctl restart restart-calib.service`, ~8h
+before that day's target TOW - well outside the ±10 min safety window).
+Statically verified (real historical log re-parse, synthetic V2
+round-trips through both files' actual functions) but **not yet verified
+against a real live capture** - the first real `CSV,2,...` line won't
+exist until the next TOW target is reached. When resuming: `grep 'CSV,2,'
+~/SiT-calib_output.txt` to check whether it landed, and verify field count
+against `CSV_LINE_FIELDS_V2` and that values look sane.
 
 ## Known issues / troubleshooting log
 
