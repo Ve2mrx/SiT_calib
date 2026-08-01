@@ -1,9 +1,11 @@
 # mbt-ubx-apps — install & operations manual
 
-GPS time-transfer calibration capture: reads u-blox TIM-TOS/TIM-SMEAS/PUBX04
-messages from a GNSS receiver plus SiT5721 registers over I2C, and once per
-24h at a fixed GPS TOW, snapshots both to `~/SiT-calib_output.txt`. Runs
-continuously in a detached `screen` session named `SiT-calib`.
+GPS time-transfer calibration capture: reads u-blox TIM-TOS/TIM-SMEAS/PUBX04/
+NAV-PVT messages from a GNSS receiver plus SiT5721 registers over I2C, and
+once per 24h at a fixed GPS TOW, snapshots both to `~/SiT-calib_output.txt`
+(including GNSS-reference-quality fields - see
+[Reference-quality fields & the CSV record](#reference-quality-fields--the-csv-record)
+below). Runs continuously in a detached `screen` session named `SiT-calib`.
 
 After every daily snapshot, `get-data.py` also calls `parse_sit.py`'s
 `regenerate()` in-process to refresh `parsed_records.json`/`.csv` (the
@@ -111,6 +113,19 @@ directive there too, or override the default:
 `ALERT_RECIPIENT="you@example.com" ./start-get-data.sh` (the env var is
 also how to redirect a test send without touching the real alias).
 
+`/etc/msmtprc` is (correctly) `600 root:root` - it holds a plaintext SMTP
+password. Since every alert-sending script here runs as `User=ve2mrx` (or
+interactively as `ve2mrx`), it can't read that file directly; a per-user
+`~/.msmtprc` (same account, `600 ve2mrx:ve2mrx`) is required too - msmtp
+checks `~/.msmtprc` before falling back to `/etc/msmtprc`. Both files are
+staged at `~/staging/msmtp/` (`etc/msmtprc`, `home_dir/.msmtprc`,
+`install-msmtp-files.sh`) - see that folder's `NOTES.md` for the full
+rationale and `LOCAL-LOG.md` for this machine's deployment history. Both
+staged files hardcode this host's `from` address (msmtp has no hostname
+macro), so if that staging folder is ever copied here from another
+machine, check/fix the `from` line before re-running the install script
+(missed once, 2026-07-25 - see the troubleshooting log below).
+
 Emails sent by this project:
 - **Normal priority**: reboot confirmation from `restart-calib.sh`, sent
   only when the previous TOW/state was fresh and reused automatically; or
@@ -138,6 +153,18 @@ Installs and enables:
   [Power-loss handling](#power-loss-handling) below).
 - `restart-calib-alert.service` — fires automatically via
   `restart-calib.service`'s `OnFailure=`; not started directly.
+
+`restart-calib.service` uses the systemd default `KillMode=control-group`,
+which matters here: `restart-calib.sh` launches the `SiT-calib` screen
+session as a *child* of this unit, in the same cgroup. If the unit fails
+for any reason, systemd tears down that whole cgroup as part of stopping
+it - killing the screen session too, even if it had only just started.
+`restart-calib.sh` therefore polls `screen -list` for up to ~3s (instead
+of checking once) before concluding the screen failed to start, so a
+session that's merely slow to register (boot-time I/O contention) isn't
+mistaken for a real failure and killed along with it. See the
+2026-07-25 troubleshooting log entry below for the incident that surfaced
+this.
 
 ## 4. First-time run (no prior state)
 
@@ -251,7 +278,151 @@ recalibration header. See SiT5721's `MANUAL.md` "Known issues" for the
 full writeup (that event's confirmation email failed to send, unrelated
 first-boot msmtprc timing, since fixed - not a bug in this logic).
 
+## Reference-quality fields & the CSV record
+
+**Added 2026-07-18.** The SiT `good, stabilized` status is oscillator-side
+only - it says nothing about whether the GNSS reference itself was
+degraded at capture time (e.g. ionospheric scintillation during a
+geomagnetic storm; a real ~0.4 ppb storm-aligned excursion was found in
+the 60328 cycle). Each block in `~/SiT-calib_output.txt` now also carries:
+
+- **`phase_unc_ns` / `freq_unc_ps_s`** - TIM-SMEAS phase/freq uncertainty.
+  Primary signal: ships in the same message as the phase reading, inflates
+  during scintillation.
+- **`time_acc_ns`** - TIM-TOS's own `gnssUncertainty` field (the
+  GNSS-reference-side time uncertainty - not NAV-PVT's `tAcc`, which mixes
+  in receiver clock/position-solution quality). Corroborating signal.
+- **`sv_count`** - NAV-PVT SV count, best-effort (see below). Coarse
+  sanity flag only - only trips on severe loss-of-lock, not the sub-ppb
+  scintillation the other two fields are meant to catch.
+
+These are written as a versioned, machine-parseable `CSV,<version>,...`
+line per block, alongside (not replacing) the original human-readable
+one-line summary - which is now **frozen/deprecated**: no new fields ever
+go there again, and it's slated for eventual removal once the CSV-line
+format has enough production history behind it. Full design rationale,
+the field list, and the versioning convention (how to add a field later)
+are documented in `parse_sit.py`'s module docstring - read that before
+touching either the log format or `parse()`.
+
+**NAV-PVT enablement**: unlike TIM-TOS/TIM-SMEAS/PUBX04 (already flowing
+from this receiver's own persisted config, set up outside this repo),
+NAV-PVT is not normally requested. `get-data.py` self-heals this: it waits
+`MESSAGE_GRACE_PERIOD_S` (15s) after startup, and only for whichever of
+the four required messages genuinely never showed up, sends a one-shot
+legacy `CFG-MSG` enable (not `CFG-VALSET` - see the Known-issues entry
+below for why). In normal operation this fires for NAV-PVT only. If you
+ever see `WARNING: <name> not observed within 15.0s, requesting it via
+CFG-MSG` in the screen output for TIM-TOS/TIM-SMEAS/PUBX04, something is
+actually wrong with the receiver/link, not just a cold start.
+
+`sv_count` can legitimately be empty even in a fresh capture: it's
+best-effort (never gates the once-daily capture) and additionally treated
+as stale/unavailable if the last NAV-PVT is more than `NAV_PVT_STALE_S`
+(5s) old at snapshot time.
+
+**Added 2026-08-01 (CSV_LINE_VERSION 2)**: the SiT `good, stabilized`
+status is oscillator-side only in a second sense too - it doesn't reveal
+*why* the oven might be struggling (a drifting thermal control loop, a
+supply sag). Seven more fields, appended at the end of the CSV line:
+
+- **`freq_offset_ppb`** - TIM-SMEAS `freqOffset`, an independent
+  measurement of the same quantity the phase chain computes (verified to
+  track the phase-derived error 1:1 in ppb) - a free cross-check on the
+  whole chain. Previously captured into the text log and discarded at CSV
+  time.
+- **`resonator_temp_c`, `supply_v`, `heater_power_w`,
+  `heater_power_target_w`, `temp_error_c`** - SiT5721 registers `0xA1`,
+  `0xA3`, `0xA7`, `0xB1`, `0xB0`. Already read every cycle by
+  `read_SiT_operation()`, which `get_SiT_data()` now actually calls (it
+  previously only called `read_SiT_config()`/`read_SiT_dynamic()` -
+  `read_SiT_operation()` ran once at process start via
+  `SiT5721.__init__()`, so these values would otherwise have been frozen
+  at their startup reading for the life of the process).
+- **`cm4_soc_temp_c`** - CM4 SoC temperature (`cm4_soc_temp_c()`, a
+  one-line `/sys/class/thermal/thermal_zone0/temp` read). Proxy for
+  enclosure-interior temperature, which is what the LEA-M8F sees - unlike
+  the SiT5721, it is *not* temperature-compensated, so this is more
+  relevant to phase-measurement noise than room temperature is. Deliberately
+  sysfs, not `vcgencmd`: this runs on the daily capture path, and
+  `vcgencmd` is a subprocess (VideoCore mailbox call) that can block or
+  fail on a missing package/permissions - none of which may ever touch a
+  capture. SiT5721's `save-SiT5721.py` has its own copy of this function
+  that *does* use `vcgencmd` (the Pi-supported interface) - safe there
+  since that 10-min sampler is already best-effort. See
+  `ubx-data/claude-code-throttle-note.md`.
+
+All empty for any block parsed as V1 (or with no CSV line at all) - there
+is no back-fill, since none of these registers were ever read into the log
+before this change. Full rationale, the exact field order, and the
+versioning mechanics are in `parse_sit.py`'s module docstring (as with v1)
+and in `ubx-data/claude-code-health-logging-patch.md`.
+
+**Also fixed in the same pass**: `get-data.py`'s human-readable block
+labeled TIM-SMEAS `freqOffset`/`freqUnc` as `ps/s` - they're u-blox
+`2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x. The `CSV_FIELDS`
+column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
+`parse_sit.py`'s docstring); only the display label and the new
+`freq_offset_ppb` CSV column use the correct unit name.
+
+This is **Step 1** of a two-part health-telemetry effort (see the patch
+doc's staging notes); **Step 2** - a 144-sample/day health log written by
+SiT5721's `save-SiT5721.py` (every 10 min, riding the existing
+`save-sit5721.timer`, no new I2C traffic) - is documented in that repo's
+own `MANUAL.md`. `nas-sync.sh` was updated to push `~/sit-health.csv`
+best-effort (a missing file must not fail the whole sync - see that
+script's own comment).
+
 ## Known issues / troubleshooting log
+
+**2026-07-25 — `restart-calib.service` failed at boot
+("`SiT-calib screen failed to start!`"), and alert email was silently
+broken too.** `sit-status.sh` reported NO-GO after a boot: `restart-calib`
+had failed and the `SiT-calib` screen wasn't running at all.
+
+Root cause: `restart-calib.sh` checked `screen -list` exactly once, right
+after launching `set-calib-screen.sh`'s `screen -d -m ...`, which forks
+and returns before the new session is necessarily fully registered. Under
+boot-time contention that single check can lose the race and see nothing
+yet - and because `restart-calib.service` runs with the systemd default
+`KillMode=control-group`, treating that as a real failure (`exit 1`)
+killed the *entire cgroup*, including the screen session even if it
+registered a moment later. A transient race turned into a hard,
+until-next-reboot outage. Fixed by polling for up to ~3s before declaring
+failure (see [systemd services](#3-systemd-services-boot-time-automation)
+above). Verified both via `systemctl restart restart-calib.service` and a
+real reboot, both succeeding with the capture correctly resuming its
+in-progress TOW target.
+
+Separately, and independently: the boot-time failure's alert email never
+arrived, because `~/staging/msmtp/` had been copied to this machine
+(timecard-mini) from `rpi-ntp` wholesale, and both staged msmtp config
+files still had rpi-ntp's `from` address baked in (`etc/msmtprc` was also
+still an older, pre-cleanup version). Every alert send failed with
+`msmtp: account default not found: no configuration file available`.
+Fixed by correcting the `from` line in both staged files to this host's
+own address and re-running `install-msmtp-files.sh`; see that folder's
+`NOTES.md`/`LOCAL-LOG.md` for the full writeup. Confirmed fixed: the next
+boot's resume-confirmation email was received.
+
+**2026-07-18 — `enable_ubx()` uses CFG-VALSET, which this receiver doesn't
+support; likely inert since day one.** While adding NAV-PVT support (see
+"Reference-quality fields" above), discovered that `get-data.py`'s
+existing `enable_ubx()` sends its config via `UBXMessage.config_set()` -
+i.e. **CFG-VALSET**, u-blox's gen-9+ (M9/F9) configuration interface. This
+receiver is a **LEA-M8F**, which predates gen-9 and does not support
+CFG-VALSET at all. That call is also already hardcoded to a no-op
+(`enableubx=False` in `main`) regardless, so this was never actually
+exercised either way. Corroborated independently by
+`~/project/ublox-config-backup/` (a separate config backup/restore tool
+for these exact receivers, on this same machine), whose own docs state
+the identical fact about M8 parts. Not fixed as part of the NAV-PVT work
+(out of scope, `enable_ubx()` untouched) - if it's ever revived, it needs
+the legacy `CFG-MSG` mechanism instead, same as the new
+`GNSSSkeletonApp.enable_message()`. See `ublox-config-backup`'s own docs
+if a real, persisted (Flash-layer) golden config for this LEA-M8F is ever
+wanted - it's the right tool for that, just not stood up yet for this
+unit.
 
 **2026-07-06/07 — capture chain down after the Trixie flash; initial
 "no TOW given" theory was wrong.** `restart-calib.service` failed at
@@ -311,8 +482,10 @@ repo), `67c225f` (SiT5721).
 | `~/SiT-calib_archive/` | Pre-power-loss `SiT-calib_output_*.txt`/`parsed_records_*.json`/`.csv`/mark file, archived by `restart-calib.sh` |
 | `~/SiT-power-loss-mark.json` | Written by SiT5721's `restart-SiT5721.py`, consumed (renamed away) by `restart-calib.sh` |
 | `lib/mbt-SiT5721-lib/` | Git submodule (shared with SiT5721) - `SiT5721` I2C class |
+| `VERSION` | Plain-text app version (e.g. `0.1.0`), read by both scripts at startup and shown in `get-data.py`'s banner / `parse_sit.py`'s verbose header |
 | `~/SiT-calib_mail-failures.log` | `send_urgent_mail()` retry/failure log (from `start-get-data.sh`) |
 | `~/restart-calib_mail-failures.log` | Retry/failure log for `restart-calib.sh`'s own mail sends |
+| `~/.msmtprc` | Per-user msmtp config (fallback for `/etc/msmtprc` being `600 root:root`) - see [Alert email configuration](#2-alert-email-configuration) above |
 | `../env-setup.sh` | (Re)creates the shared venv (`../env/`) - stdlib `python3 -m venv --system-site-packages`, PEP-668-safe |
 | `../reinstall.sh` | Whole-device provisioning/health check (OS packages, I2C/serial, venv, repos, systemd, mail) - see its own header |
 | `../nas-sync/` | Pushes calibration files to the Synology NAS, triggered by `nas-sync.path` on `parsed_records.csv` changes - see [NAS sync](#5-nas-sync-calibration-files--synology) above |
