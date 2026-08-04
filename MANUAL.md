@@ -286,9 +286,13 @@ degraded at capture time (e.g. ionospheric scintillation during a
 geomagnetic storm; a real ~0.4 ppb storm-aligned excursion was found in
 the 60328 cycle). Each block in `~/SiT-calib_output.txt` now also carries:
 
-- **`phase_unc_ns` / `freq_unc_ps_s`** - TIM-SMEAS phase/freq uncertainty.
-  Primary signal: ships in the same message as the phase reading, inflates
-  during scintillation.
+- **`phase_unc_ns` / `freq_unc_ppb`** - TIM-SMEAS phase/freq uncertainty.
+  Ships in the same message as the phase reading.
+  ⚠ `freq_unc_ppb` was named `freq_unc_ps_s` until 2026-08-03 - same column,
+  same values, the old name was wrong by 1000x. Archived CSVs keep it; read
+  either name. ⚠ `phase_unc_ns` is **pinned at a nominal constant**
+  (4.1640625 ns) and is *not* a live estimate - base any quality gate on
+  `freq_unc_ppb` + `time_acc_ns`, never on `phase_unc_ns`.
 - **`time_acc_ns`** - TIM-TOS's own `gnssUncertainty` field (the
   GNSS-reference-side time uncertainty - not NAV-PVT's `tAcc`, which mixes
   in receiver clock/position-solution quality). Corroborating signal.
@@ -360,10 +364,18 @@ and in `ubx-data/claude-code-health-logging-patch.md`.
 
 **Also fixed in the same pass**: `get-data.py`'s human-readable block
 labeled TIM-SMEAS `freqOffset`/`freqUnc` as `ps/s` - they're u-blox
-`2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x. The `CSV_FIELDS`
-column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
-`parse_sit.py`'s docstring); only the display label and the new
-`freq_offset_ppb` CSV column use the correct unit name.
+`2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x.
+
+**Column renamed 2026-08-03**: `freq_unc_ps_s` -> **`freq_unc_ppb`**. Deferred
+originally on the belief that it would break consumers reading by name; an
+audit showed otherwise - `ImportSiTCalib` reads `parsed_records.csv` **by
+column index** and skips the header, and `build_csv_line()` emits positionally.
+The column keeps index 17, so the field-position contract is intact. Archived
+`parsed_records.csv`/`.json` keep the old name permanently, so name-based
+readers should accept both:
+`row.get("freq_unc_ppb") or row.get("freq_unc_ps_s")`.
+`SMEAS_UNC_RE` in `parse_sit.py` still matches the literal text `ps/s` on
+purpose - historic log bytes say that. See its comment before touching it.
 
 This is **Step 1** of a two-part health-telemetry effort (see the patch
 doc's staging notes); **Step 2** - a 144-sample/day health log written by

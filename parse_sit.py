@@ -45,13 +45,19 @@ archived files (same schema) for the prior epoch's history if needed.
 
 Unit-label fix (2026-07-04): get-data.py's verbose "TIM-SMEAS ... freq
 offset"/"freq uncertainty" lines in SiT-calib_output.txt were mislabeled
-"ns" - those fields are actually ps/s (per u-blox's TIM-SMEAS scaling,
-2**-8 ps/s per LSB), not a time offset like phaseOffset/phaseUnc genuinely
-are. Fixed to read "ps/s" going forward. For Cowork: this is a display-only
-fix in the raw log text - parse()/CSV_FIELDS never captured freqOffset/
-freqUnc (only phase_ns), so parsed_records.json/.csv and anything built
-from them are unaffected; only raw SiT-calib_output.txt/archived copies
-from before this date show the old "ns" mislabel on those two lines.
+"ns" - those fields are not a time offset like phaseOffset/phaseUnc
+genuinely are. Relabeled to "ps/s" going forward. For Cowork: this is a
+display-only fix in the raw log text - parse()/CSV_FIELDS never captured
+freqOffset/freqUnc (only phase_ns), so parsed_records.json/.csv and
+anything built from them are unaffected; only raw SiT-calib_output.txt/
+archived copies from before this date show the old "ns" mislabel.
+
+!! SUPERSEDED 2026-08-01: "ps/s" was ALSO wrong. The scaling is 2**-8 **ppb**
+   per LSB, not 2**-8 ps/s, so that fix replaced one wrong unit with another
+   that is off by 1000x in the other direction. Corrected to "ppb" in
+   get-data.py on 2026-08-01 (commit cf4be2f). Log text written between
+   2026-07-04 and 2026-08-01 says "ps/s" and is wrong; text before it says
+   "ns" and is also wrong. The numbers themselves were always right.
 
 CSV record + reference-quality fields (2026-07-18): get-data.py now embeds
 a machine-parseable `CSV,<version>,...` line in every block of
@@ -64,12 +70,12 @@ falls back unchanged to SUMMARY_RE/UTC_RE/PULL_RE/AGING_RE.
 
 Four new GNSS-reference-quality fields ride along, appended to
 `CSV_FIELDS` after `total_log` per the field-position contract above:
-`phase_unc_ns`/`freq_unc_ps_s` (TIM-SMEAS phase/freq uncertainty),
+`phase_unc_ns`/`freq_unc_ppb` (TIM-SMEAS phase/freq uncertainty),
 `time_acc_ns` (TIM-TOS GNSS time uncertainty - the reference side, unlike
 the SiT status which is oscillator-side only), and `sv_count` (NAV-PVT SV
 count, best-effort - may be empty even in a CSV-line block if NAV-PVT
 hadn't arrived recently enough when the snapshot was taken). For blocks
-with no CSV line: `phase_unc_ns`/`freq_unc_ps_s` still backfill via
+with no CSV line: `phase_unc_ns`/`freq_unc_ppb` still backfill via
 `SMEAS_UNC_RE` (that text already existed, unparsed, in every historic
 entry); `time_acc_ns`/`sv_count` can't backfill and come back empty -
 TIM-TOS never printed a GNSS-uncertainty field and NAV-PVT never existed
@@ -113,10 +119,29 @@ text since 2026-07-19, but not yet wired into a back-fill regex here; see
 
 Also note: TIM-SMEAS `freqOffset`/`freqUnc` are u-blox `2^-8 ppb`, scaled
 by pyubx2 - i.e. **ppb**, not `ps/s`/`ns` as get-data.py's human-readable
-block previously labeled them (fixed the same day as this CSV bump). The
-existing `freq_unc_ps_s` column name/values are unaffected (never wrong,
-only mislabeled at display time) - deliberately not renamed here, see that
-fix's own note in get-data.py.
+block previously labeled them (fixed the same day as this CSV bump).
+
+COLUMN RENAMED (2026-08-03): `freq_unc_ps_s` -> `freq_unc_ppb`.
+The *values* were never wrong - only the name was, by a factor of 1000. The
+rename was deferred at the time on the belief that it "breaks every consumer
+that reads by name"; an audit showed that to be false. The main consumer,
+Excel/ImportSiTCalib-*.bas, reads parsed_records.csv **by column index** and
+skips the header entirely, and get-data.py's build_csv_line() emits a
+positional list. A rename moves nothing, so nothing there notices.
+
+For Cowork / anyone reading archived data:
+  * Column ORDER is unchanged - `freq_unc_ppb` still sits at index 17 of
+    CSV_FIELDS, exactly where `freq_unc_ps_s` was. The field-position
+    contract above is intact.
+  * Archived parsed_records.csv/.json (NAS, Excel/_Archive/) keep the OLD
+    name forever. Name-based readers should accept both for a release or
+    two:  val = row.get("freq_unc_ppb") or row.get("freq_unc_ps_s")
+  * The live file needs no migration: regenerate() rewrites the whole CSV
+    from SiT-calib_output.txt on every run, so the header flips on the
+    first run after this change.
+  * SMEAS_UNC_RE still matches the literal text "ps/s" on purpose - see the
+    comment on it below before touching it.
+Read every historic `freq_unc_ps_s` value as ppb. Typical value ~4.2 ppb.
 """
 
 import io
@@ -168,7 +193,10 @@ def atomic_write_text(path, text, newline=None):
 CSV_FIELDS = ["idx", "date", "time", "wno", "itow", "phase_ns",
               "total_ppm", "pull_ppm", "aging_pps", "retune", "flags", "status",
               "pull_log8g", "aging_log8g", "dow_fr", "total_log",
-              "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count",
+              # freq_unc_ppb was named freq_unc_ps_s until 2026-08-03. Same
+              # index (17), same values - the old name was wrong by 1000x.
+              # Archived CSVs keep it; readers should accept either.
+              "phase_unc_ns", "freq_unc_ppb", "time_acc_ns", "sv_count",
               # v2 additions (2026-08-01) - APPEND ONLY, ImportSiTCalib
               # indexes this file. Empty for blocks parsed from a CSV,1,...
               # line or no CSV line at all (see CSV_LINE_FIELDS_V2 below).
@@ -248,9 +276,10 @@ TOS_RE   = re.compile(r"TIM-TOS\s+week, TOW, system\s+(\d+)\s*,\s*(\d+)")
 #
 #    Change this to "ppb" and the backfill silently stops matching every
 #    historic block, which is the only thing it exists for. The captured value
-#    still lands in the field named freq_unc_ps_s (see CSV_FIELDS) - a name
-#    that is also wrong, also deliberately, and tracked for rename in
-#    ../claude-code-todo.md ("HIGH PRIORITY - UNITS BUG"). Read it as ppb.
+#    still lands in the field CSV_FIELDS calls freq_unc_ppb, which was
+#    renamed from freq_unc_ps_s on 2026-08-03 precisely because the old name
+#    was misread three times. The regex text and the field name disagree on
+#    purpose: the text describes bytes on disk, the name describes the unit.
 #
 #    There is no version ambiguity to worry about: the label changed on
 #    2026-08-01, long after CSV lines existed, so no block can both lack a
@@ -267,7 +296,7 @@ CSV_LINE_FIELDS_V1 = [
     "date", "time", "wno", "itow", "phase_ns", "total_log",
     "pull_log8g", "aging_log8g", "flags_freq", "flags_phase",
     "status_error", "status_stability",
-    "phase_unc_ns", "freq_unc_ps_s", "time_acc_ns", "sv_count",
+    "phase_unc_ns", "freq_unc_ppb", "time_acc_ns", "sv_count",
 ]
 
 # v2 = v1 + appended SiT health telemetry, CM4 SoC temp, and TIM-SMEAS
@@ -340,7 +369,7 @@ def parse(path):
                 flags = f"freq: {csv_rec['flags_freq']}, phase: {csv_rec['flags_phase']}"
                 status = f"{csv_rec['status_error']}, {csv_rec['status_stability']}"
                 phase_unc_ns = float(csv_rec["phase_unc_ns"]) if csv_rec["phase_unc_ns"] else None
-                freq_unc_ps_s = float(csv_rec["freq_unc_ps_s"]) if csv_rec["freq_unc_ps_s"] else None
+                freq_unc_ppb = float(csv_rec["freq_unc_ppb"]) if csv_rec["freq_unc_ppb"] else None
                 time_acc_ns = float(csv_rec["time_acc_ns"]) if csv_rec["time_acc_ns"] else None
                 sv_count = int(csv_rec["sv_count"]) if csv_rec["sv_count"] else None
                 # v2-only fields (see CSV_LINE_FIELDS_V2) - absent from a
@@ -373,7 +402,7 @@ def parse(path):
                 pull_8g = float(pull.group(1)) if pull else None
                 aging_8g = float(aging.group(1)) if aging else None
                 phase_unc_ns = float(smeas_unc.group("phase_unc")) if smeas_unc else None
-                freq_unc_ps_s = float(smeas_unc.group("freq_unc")) if smeas_unc else None
+                freq_unc_ppb = float(smeas_unc.group("freq_unc")) if smeas_unc else None
                 time_acc_ns = None    # TIM-TOS never printed this before the CSV line
                 sv_count = None       # NAV-PVT didn't exist as a source before the CSV line
                 freq_offset_ppb = None        # v2-only, see CSV_LINE_FIELDS_V2
@@ -400,7 +429,7 @@ def parse(path):
                 "status":        status,
                 "total_log":     total_log,                           # raw log total (reference)
                 "phase_unc_ns":  phase_unc_ns,                        # TIM-SMEAS phase uncertainty (ns)
-                "freq_unc_ps_s": freq_unc_ps_s,                       # TIM-SMEAS freq uncertainty (ps/s)
+                "freq_unc_ppb":  freq_unc_ppb,                       # TIM-SMEAS freq uncertainty (ppb)
                 "time_acc_ns":   time_acc_ns,                         # TIM-TOS GNSS time uncertainty (ns)
                 "sv_count":      sv_count,                            # NAV-PVT SV count (best-effort)
                 "freq_offset_ppb":       freq_offset_ppb,             # TIM-SMEAS freq offset (ppb) - v2
@@ -519,7 +548,7 @@ def regenerate(path, verbose=True, force=False):
             r["dow_fr"],
             repr(r["total_log"]),
             ("" if r["phase_unc_ns"] is None else repr(r["phase_unc_ns"])),
-            ("" if r["freq_unc_ps_s"] is None else repr(r["freq_unc_ps_s"])),
+            ("" if r["freq_unc_ppb"] is None else repr(r["freq_unc_ppb"])),
             ("" if r["time_acc_ns"] is None else repr(r["time_acc_ns"])),
             ("" if r["sv_count"] is None else r["sv_count"]),
             ("" if r["freq_offset_ppb"] is None else repr(r["freq_offset_ppb"])),
