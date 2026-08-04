@@ -397,7 +397,27 @@ synced to the NAS on the first capture, `cm4_soc_temp_c` populated (n=57,
 mean 58.3 degC) and `warnings: []`. The version-bump suppression proved itself
 in production - other fields showed n=63 while CM4 showed n=57, because six
 rows predate the `HEALTH_LINE_VERSION` 1->2 bump, and no false warning was
-emitted.
+emitted. `CSV_LINE_VERSION` 2 itself is confirmed live too: 3 real `CSV,2,`
+records were in `~/SiT-calib_output.txt` before the restart below (was 0
+as of 2026-08-01's session).
+
+**Restarted again 2026-08-03** (23:19 EDT, ~23h47m before that day's target
+TOW) to pick up the `freq_unc_ppb` rename and merge above, discovered stale:
+`get-data.py` does `import parse_sit` once at process start and calls
+`parse_sit.regenerate()` inside its capture loop every cycle, so the
+*running* process keeps using whatever `parse_sit.py` looked like when it
+started - Python doesn't reload an already-imported module just because the
+file on disk changed. The process launched at 2026-08-01 15:42 was still on
+the pre-rename `parse_sit`, even though the file itself had carried the
+rename since 2026-08-03 22:32 - about 2.5 days of drift between disk and
+what was actually running, caught by comparing `ps -eo lstart` for the
+`get-data.py` PID against `stat`'s mtime on `get-data.py`/`parse_sit.py`.
+Not a data-integrity issue (the rename is positional/cosmetic per its own
+note above), but worth remembering as a general rule: **any change to
+`get-data.py` or `parse_sit.py` needs a capture restart to actually take
+effect**, and that same lstart-vs-mtime comparison is the way to check
+whether one is overdue, the same way `sit-status.sh`'s TOW-freshness check
+tells you whether a restart is currently safe.
 
 ## Known issues / troubleshooting log
 
