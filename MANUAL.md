@@ -286,7 +286,6 @@ degraded at capture time (e.g. ionospheric scintillation during a
 geomagnetic storm; a real ~0.4 ppb storm-aligned excursion was found in
 the 60328 cycle). Each block in `~/SiT-calib_output.txt` now also carries:
 
-<<<<<<< HEAD
 - **`phase_unc_ns` / `freq_unc_ppb`** - TIM-SMEAS phase/freq uncertainty.
   Ships in the same message as the phase reading.
   ⚠ `freq_unc_ppb` was named `freq_unc_ps_s` until 2026-08-03 - same column,
@@ -294,11 +293,6 @@ the 60328 cycle). Each block in `~/SiT-calib_output.txt` now also carries:
   either name. ⚠ `phase_unc_ns` is **pinned at a nominal constant**
   (4.1640625 ns) and is *not* a live estimate - base any quality gate on
   `freq_unc_ppb` + `time_acc_ns`, never on `phase_unc_ns`.
-=======
-- **`phase_unc_ns` / `freq_unc_ps_s`** - TIM-SMEAS phase/freq uncertainty.
-  Primary signal: ships in the same message as the phase reading, inflates
-  during scintillation.
->>>>>>> feature/gnss-reference-quality-fields
 - **`time_acc_ns`** - TIM-TOS's own `gnssUncertainty` field (the
   GNSS-reference-side time uncertainty - not NAV-PVT's `tAcc`, which mixes
   in receiver clock/position-solution quality). Corroborating signal.
@@ -370,7 +364,6 @@ and in `ubx-data/claude-code-health-logging-patch.md`.
 
 **Also fixed in the same pass**: `get-data.py`'s human-readable block
 labeled TIM-SMEAS `freqOffset`/`freqUnc` as `ps/s` - they're u-blox
-<<<<<<< HEAD
 `2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x.
 
 **Column renamed 2026-08-03**: `freq_unc_ps_s` -> **`freq_unc_ppb`**. Deferred
@@ -405,33 +398,6 @@ mean 58.3 degC) and `warnings: []`. The version-bump suppression proved itself
 in production - other fields showed n=63 while CM4 showed n=57, because six
 rows predate the `HEALTH_LINE_VERSION` 1->2 bump, and no false warning was
 emitted.
-=======
-`2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x. The `CSV_FIELDS`
-column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
-`parse_sit.py`'s docstring); only the display label and the new
-`freq_offset_ppb` CSV column use the correct unit name.
-
-This is **Step 1** of a three-part health-telemetry effort (see the patch
-doc's staging notes). **Step 2** - a 144-sample/day health log written by
-SiT5721's `save-SiT5721.py` (every 10 min, riding the existing
-`save-sit5721.timer`, no new I2C traffic, plus CM4 SoC temp via
-`vcgencmd` there - deliberately *not* here, see `cm4_soc_temp_c()`'s own
-docstring) - and **Step 3** - trailing-24h statistics computed from that
-log - are both documented in that repo's own `MANUAL.md`, and both live
-since 2026-08-01. `nas-sync.sh` was updated to push `~/sit-health.csv`/
-`~/sit-health-24h.json` best-effort (a missing file must not fail the
-whole sync - see that script's own comment).
-
-**Status as of 2026-08-01**: this Step 1 code was restarted into the live
-capture the same day (`systemctl restart restart-calib.service`, ~8h
-before that day's target TOW - well outside the ±10 min safety window).
-Statically verified (real historical log re-parse, synthetic V2
-round-trips through both files' actual functions) but **not yet verified
-against a real live capture** - the first real `CSV,2,...` line won't
-exist until the next TOW target is reached. When resuming: `grep 'CSV,2,'
-~/SiT-calib_output.txt` to check whether it landed, and verify field count
-against `CSV_LINE_FIELDS_V2` and that values look sane.
->>>>>>> feature/gnss-reference-quality-fields
 
 ## Known issues / troubleshooting log
 
