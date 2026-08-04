@@ -232,7 +232,29 @@ TOS_RE   = re.compile(r"TIM-TOS\s+week, TOW, system\s+(\d+)\s*,\s*(\d+)")
 # Legacy-only backfill: matches get-data.py's pre-CSV-line "TIM-SMEAS phase
 # uncertainty: ... ns, freq uncertainty: ... ps/s" line, which already
 # exists (unparsed until now) in every historic block. Not consulted once a
-# block has a CSV line.
+# block has a CSV line - and since every block since 2026-07-18 carries one,
+# this path is in practice dead. Kept only so a pre-2026-07-18 log can still
+# be re-parsed.
+#
+# !! THE "ps/s" IN THIS PATTERN IS A WRONG UNIT, AND IT IS WRONG ON PURPOSE.
+#    DO NOT "FIX" IT TO ppb.
+#
+#    u-blox TIM-SMEAS freqOffset/freqUnc are 2^-8 **ppb** and pyubx2 already
+#    applies the scale, so the number these lines carry has always been ppb.
+#    get-data.py printed the label as "ps/s" until 2026-08-01, when the
+#    display was corrected (commit cf4be2f). This regex does not describe what
+#    the value *is* - it matches the literal text that older logs on disk
+#    actually contain. Those bytes say "ps/s" and will say "ps/s" forever.
+#
+#    Change this to "ppb" and the backfill silently stops matching every
+#    historic block, which is the only thing it exists for. The captured value
+#    still lands in the field named freq_unc_ps_s (see CSV_FIELDS) - a name
+#    that is also wrong, also deliberately, and tracked for rename in
+#    ../claude-code-todo.md ("HIGH PRIORITY - UNITS BUG"). Read it as ppb.
+#
+#    There is no version ambiguity to worry about: the label changed on
+#    2026-08-01, long after CSV lines existed, so no block can both lack a
+#    CSV line and print "ppb".
 SMEAS_UNC_RE = re.compile(
     r"TIM-SMEAS\s+phase uncertainty:\s*(?P<phase_unc>[-+]?\d+(?:\.\d+)?)\s*ns\s*,"
     r"\s*freq uncertainty:\s*(?P<freq_unc>[-+]?\d+(?:\.\d+)?)\s*ps/s"
