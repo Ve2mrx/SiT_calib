@@ -384,13 +384,27 @@ readers should accept both:
 `SMEAS_UNC_RE` in `parse_sit.py` still matches the literal text `ps/s` on
 purpose - historic log bytes say that. See its comment before touching it.
 
-This is **Step 1** of a two-part health-telemetry effort (see the patch
-doc's staging notes); **Step 2** - a 144-sample/day health log written by
+This is **Step 1** of a three-part health-telemetry effort (see the patch
+doc's staging notes). **Step 2** - a 144-sample/day health log written by
 SiT5721's `save-SiT5721.py` (every 10 min, riding the existing
-`save-sit5721.timer`, no new I2C traffic) - is documented in that repo's
-own `MANUAL.md`. `nas-sync.sh` was updated to push `~/sit-health.csv`
-best-effort (a missing file must not fail the whole sync - see that
-script's own comment).
+`save-sit5721.timer`, no new I2C traffic, plus CM4 SoC temp via `vcgencmd`
+there - deliberately *not* here, see `cm4_soc_temp_c()`'s own docstring) -
+and **Step 3** - trailing-24 h statistics computed from that log - are both
+documented in that repo's own `MANUAL.md`, and both live since 2026-08-01.
+`nas-sync.sh` was updated to push `~/sit-health.csv` / `~/sit-health-24h.json`
+best-effort (a missing file must not fail the whole sync - see that script's
+own comment).
+
+**Status**: Step 1 was restarted into the live capture on 2026-08-01
+(`systemctl restart restart-calib.service`, ~8 h before that day's target
+TOW - well outside the +/-10 min safety window). Statically verified at the
+time (real historical log re-parse, synthetic V2 round-trips through both
+files' actual functions), and **verified live on 2026-08-02**: the health log
+synced to the NAS on the first capture, `cm4_soc_temp_c` populated (n=57,
+mean 58.3 degC) and `warnings: []`. The version-bump suppression proved itself
+in production - other fields showed n=63 while CM4 showed n=57, because six
+rows predate the `HEALTH_LINE_VERSION` 1->2 bump, and no false warning was
+emitted.
 =======
 `2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x. The `CSV_FIELDS`
 column name `freq_unc_ps_s` is unchanged (deliberately not renamed - see
