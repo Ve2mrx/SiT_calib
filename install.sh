@@ -12,6 +12,10 @@ SCRIPTS=(
     set-calib-screen.sh
     start-get-data.sh
     restart-calib.sh
+    # Manual re-tune cycle boundary. Deliberately NOT called by anything -
+    # restart-calib.sh covers the power-loss path only, and starting a
+    # cycle is always a human decision. Dry run is its default.
+    retune-new-cycle.sh
     check-SiT5721-defaults.py
 )
 
