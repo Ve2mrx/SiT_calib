@@ -366,6 +366,30 @@ and in `ubx-data/claude-code-health-logging-patch.md`.
 labeled TIM-SMEAS `freqOffset`/`freqUnc` as `ps/s` - they're u-blox
 `2^-8 ppb`, scaled by pyubx2, i.e. **ppb**, wrong by 1000x.
 
+**Added 2026-08-28 (CSV_LINE_VERSION 3)**: one column, appended.
+
+- **`uptime_s`** - SiT5721 register `0xA0`, *Time Since Power Up*, 4-byte
+  unsigned. The value was already read into `data{}` and printed in the
+  human-readable block; v3 simply carries it into the CSV.
+  **Why:** `0xA0` is reset by a power cycle and by nothing else, so it is a
+  strictly better power-loss detector than `check-SiT5721-defaults.py`'s
+  "are all four calibration registers at their defaults?" test - which loses
+  its redundancy the moment `aging_compensation` is legitimately set to `0`,
+  because `0` *is* the power-on default. With this column every capture
+  carries its own evidence: `uptime_s` must increase between consecutive
+  captures, and any decrease is an unambiguous reset.
+  ⚠ **These are the device's own seconds, not wall-clock seconds.** Measured
+  2026-08-28 across cycle `60820`, whose captures are exactly 86400 s apart
+  in GPS time: `0xA0` advances **~84632 s per capture**, i.e. the counter
+  runs **~2.05 % slow**. That is precisely why the aging register's effective
+  contribution is `aging x 84632` (= -0.05902 ppb/day, matching the measured
+  `d(total_ppm)/day`) rather than the nominal `aging x 86400` (-0.06025).
+  **Anyone converting a desired ppb/day into an aging value must divide by
+  the measured rate, not by 86400.** Full derivation:
+  `aging-register-recomputed-2026-08-28.md`.
+  Empty for every V1/V2 block - no back-fill is possible, the value was
+  never written to the log before v3.
+
 **Column renamed 2026-08-03**: `freq_unc_ps_s` -> **`freq_unc_ppb`**. Deferred
 originally on the belief that it would break consumers reading by name; an
 audit showed otherwise - `ImportSiTCalib` reads `parsed_records.csv` **by

@@ -117,7 +117,7 @@ NAV_PVT_STALE_S = 5.0
 # v2 (2026-08-01): appended SiT health telemetry (resonator temp, supply V,
 # heater power + target, temp error), CM4 SoC temp, and TIM-SMEAS freqOffset -
 # see claude-code-health-logging-patch.md.
-CSV_LINE_VERSION = 2
+CSV_LINE_VERSION = 3
 
 
 class GNSSSkeletonApp:
@@ -807,6 +807,29 @@ def build_csv_line(data: dict) -> str:
         repr(data['SiT.heater_power_tgt']),
         repr(data['SiT.temp_error']),
         ("" if data['CM4.soc_temp_c'] is None else repr(data['CM4.soc_temp_c'])),
+        # --- v3 addition (2026-08-28): SiT5721 register 0xA0, Time Since
+        # Power Up, in SECONDS OF THE DEVICE'S OWN CLOCK. Already read into
+        # data{} and printed in the human block since the health-logging
+        # work; it was simply never carried into the CSV.
+        #
+        # WHY: 0xA0 is reset by a power cycle and by NOTHING ELSE, so it is
+        # a far better power-loss detector than comparing the calibration
+        # registers against their defaults - which is what
+        # check-SiT5721-defaults.py does today, and which loses its
+        # redundancy the moment aging_compensation is legitimately set to 0
+        # (0 IS the power-on default). With this column, every capture
+        # carries its own evidence: uptime must INCREASE between
+        # consecutive captures, and any decrease is an unambiguous reset.
+        #
+        # !! NOT WALL-CLOCK SECONDS. Measured 2026-08-28 over cycle 60820,
+        # whose captures are exactly 86400 s apart in GPS time: 0xA0
+        # advances ~84632 s per capture, i.e. the counter runs ~2.05% SLOW.
+        # That is exactly why the register's effective drift contribution is
+        # aging*84632 (= -0.05902 ppb/day, the measured d(total_ppm)/day)
+        # and not the nominal aging*86400 (-0.06025). Anyone converting a
+        # desired ppb/day into an aging value must divide by the MEASURED
+        # rate, not 86400. See aging-register-recomputed-2026-08-28.md.
+        ("" if data['SiT.uptime'] is None else data['SiT.uptime']),
     ]
     return f"CSV,{CSV_LINE_VERSION}," + ",".join(str(f) for f in fields)
 

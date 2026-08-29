@@ -142,6 +142,25 @@ For Cowork / anyone reading archived data:
   * SMEAS_UNC_RE still matches the literal text "ps/s" on purpose - see the
     comment on it below before touching it.
 Read every historic `freq_unc_ps_s` value as ppb. Typical value ~4.2 ppb.
+
+SiT5721 uptime (2026-08-28, CSV_LINE_VERSION 3): one column appended,
+`uptime_s` - register 0xA0, Time Since Power Up. It was already read and
+printed by get-data.py; only the CSV was missing it. 0xA0 is reset by a
+power cycle and by nothing else, which makes it a better reset detector
+than comparing the calibration registers to their defaults - a test that
+loses its redundancy as soon as aging_compensation is legitimately 0, since
+0 is itself the power-on default. Every capture now carries its own
+evidence: uptime must increase between consecutive captures.
+
+!! uptime_s is in the DEVICE'S OWN SECONDS, not wall-clock seconds. Over
+cycle 60820, whose captures are exactly 86400 s apart in GPS time, 0xA0
+advances ~84632 s per capture - the counter runs ~2.05% slow. This is why
+the aging register contributes aging*84632 (-0.05902 ppb/day, matching the
+measured d(total_ppm)/day) and not the nominal aging*86400 (-0.06025).
+Converting a target ppb/day into an aging value must divide by the measured
+rate. See aging-register-recomputed-2026-08-28.md.
+
+Empty for every V1/V2 block - no back-fill, the value was never logged.
 """
 
 import io
@@ -202,7 +221,13 @@ CSV_FIELDS = ["idx", "date", "time", "wno", "itow", "phase_ns",
               # line or no CSV line at all (see CSV_LINE_FIELDS_V2 below).
               "freq_offset_ppb", "resonator_temp_c", "supply_v",
               "heater_power_w", "heater_power_target_w", "temp_error_c",
-              "cm4_soc_temp_c"]
+              "cm4_soc_temp_c",
+              # v3 addition (2026-08-28) - APPEND ONLY, same reason as v2.
+              # SiT5721 0xA0 uptime, in the device's own seconds (~2.05%
+              # slow vs GPS time - see get-data.py's build_csv_line()).
+              # Empty for every V1/V2 block; there is no back-fill, because
+              # the value was never written to the log before v3.
+              "uptime_s"]
 
 # French weekday names, indexed by datetime.weekday() (Mon=0 .. Sun=6).
 # Row 14 ("Day of week") in Calc-new uses these.
@@ -306,6 +331,11 @@ CSV_LINE_FIELDS_V2 = CSV_LINE_FIELDS_V1 + [
     "heater_power_w", "heater_power_target_w", "temp_error_c", "cm4_soc_temp_c",
 ]
 
+# v3 = v2 + the SiT5721 uptime register (2026-08-28). Append-only.
+CSV_LINE_FIELDS_V3 = CSV_LINE_FIELDS_V2 + [
+    "uptime_s",
+]
+
 
 def parse_csv_line(block):
     """
@@ -327,6 +357,8 @@ def parse_csv_line(block):
         fields = CSV_LINE_FIELDS_V1
     elif version == 2:
         fields = CSV_LINE_FIELDS_V2
+    elif version == 3:
+        fields = CSV_LINE_FIELDS_V3
     else:
         return None      # unrecognized future version -> legacy path, never crash
     # csv.reader rather than a plain .split(",") - none of build_csv_line()'s
@@ -382,6 +414,11 @@ def parse(path):
                 heater_power_target_w = float(csv_rec["heater_power_target_w"]) if csv_rec.get("heater_power_target_w") else None
                 temp_error_c = float(csv_rec["temp_error_c"]) if csv_rec.get("temp_error_c") else None
                 cm4_soc_temp_c = float(csv_rec["cm4_soc_temp_c"]) if csv_rec.get("cm4_soc_temp_c") else None
+                # v3-only. NB a genuine uptime of 0 is indistinguishable from
+                # "absent" under the `if ... else None` idiom used above, but
+                # 0 only occurs in the first second after power-up and the
+                # capture runs once a day, so it cannot arise in practice.
+                uptime_s = int(csv_rec["uptime_s"]) if csv_rec.get("uptime_s") else None
             else:
                 # No CSV line - block predates this change. Legacy
                 # extraction, unchanged, plus SMEAS_UNC_RE backfill for the
@@ -412,6 +449,7 @@ def parse(path):
                 heater_power_target_w = None
                 temp_error_c = None
                 cm4_soc_temp_c = None
+                uptime_s = None               # v3-only, see CSV_LINE_FIELDS_V3
 
             rec = {
                 "date":          date,                                 # calendar date (UTC)
@@ -439,6 +477,7 @@ def parse(path):
                 "heater_power_target_w": heater_power_target_w,       # SiT 0xB1 - v2
                 "temp_error_c":          temp_error_c,                # SiT 0xB0 - v2
                 "cm4_soc_temp_c":        cm4_soc_temp_c,              # CM4 SoC temp (best-effort) - v2
+                "uptime_s":              uptime_s,                    # SiT 0xA0 - v3; DEVICE clock, ~2.05% slow
             }
             records.append(rec)
             buf = []  # reset for next block
@@ -558,6 +597,7 @@ def regenerate(path, verbose=True, force=False):
             ("" if r["heater_power_target_w"] is None else repr(r["heater_power_target_w"])),
             ("" if r["temp_error_c"] is None else repr(r["temp_error_c"])),
             ("" if r["cm4_soc_temp_c"] is None else repr(r["cm4_soc_temp_c"])),
+            ("" if r["uptime_s"] is None else r["uptime_s"]),
         ])
     atomic_write_text(os.path.join(out_dir, "parsed_records.csv"), csv_buf.getvalue(), newline="")
 
