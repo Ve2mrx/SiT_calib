@@ -207,6 +207,30 @@ sends a **non-urgent** alert email (same `ALERT_RECIPIENT=root`/msmtp
 pattern as the rest of this manual) - failure log at
 `~/nas-sync_mail-failures.log`.
 
+⚠ **Inside `do_sync()` the ORDER is load-bearing: `~/SiT-calib_archive/`
+is pushed FIRST**, before the live files and independent of their exit
+status. Until 2026-09-11 it was last, behind
+`rsync ... parsed_records.* || return 1`, and that inverted the priority
+exactly when it mattered. A cycle rotation (`retune-new-cycle.sh`, or
+`restart-calib.sh` on power loss) *moves* `parsed_records.*` into the
+archive - which is itself a change to `parsed_records.csv`, so it fires
+`nas-sync.path` while the file is gone. rsync then transferred the sources
+that did exist, reported the two missing ones, exited 23, and the function
+returned before ever reaching the archive push. Net effect: the cheap root
+files synced normally while the **closed cycle's only copy stayed on the
+Pi**, and the alert mail read like a routine transient. Cycle `60820` sat
+that way for 12 h on 2026-09-11 before it was noticed.
+
+Consequently `parsed_records.*` are now optional arguments, but only under
+a specific test: they may be absent **iff `~/SiT-calib_output.txt` holds
+nothing but comment lines**, which is the just-rotated state and is written
+that way by both rotation paths (`retune-new-cycle.sh`, `restart-calib.sh`)
+- so the test needs no path-specific string and cannot go stale the way an
+archive-stamp check would. Any *other* absence still fails and alerts,
+because that means `parse_sit.regenerate()` is broken. ⚠ Do not simplify
+this to "ignore missing files": that would hide the real fault it exists
+to catch.
+
 Install/verify via `../ubx-data/reinstall.sh` (calls
 `nas-sync/install-nas-sync.sh` as one of its stages) or run that script
 directly. Same verify-only boundary as msmtp: the mount/credentials
