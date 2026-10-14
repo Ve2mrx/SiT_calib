@@ -282,9 +282,18 @@ only verifies the mount and installs the systemd units.
   from the TIM-TOS / TIM-SMEAS it already parses: `DiscSrc` (1 = GNSS is
   the reference; `discsrc_seen` / `n_not_gnss` catch an excursion inside the
   minute), the in-limit / locked-pulse flags, the int/ext oscillator
-  offsets and uncertainties, and TIM-SMEAS EXTINT0 (= the SiT) and internal
-  oscillator `freqOffset` / `freqUnc`, all in ppb. Columns: `lea_view.py`
-  `COLUMNS`; `version` column bumps with them. It is the only record of
+  offsets and uncertainties, and TIM-SMEAS `freqOffset` / `freqUnc` for the
+  internal oscillator, GNSS and EXTINT0 (= the SiT), all in ppb. Columns:
+  `lea_view.py` `COLUMNS`; the `version` column bumps with them (v2 since
+  2026-10-14 added GNSS). A file with another version's header is renamed
+  to `lea-view.v<N>-<UTC>.csv` on the first write, never appended to.
+  ⚠ What it is measured against (u-blox spec UBX-13003221 §32.20.4/.7, in
+  `GNSS_parameters/docs/u-blox/`): TIM-SMEAS GNSS and EXTINT0 are both
+  measured **against the LEA's internal oscillator**, so the SiT vs GNSS
+  is `ext0` relative to `gnss`, not `ext0` alone - the daily CSV's
+  `freq_offset_ppb` is that same EXTINT0 value. The TIM-TOS `ext_osc_*`
+  columns describe an oscillator the LEA *disciplines*; the SiT is not one,
+  so they read 0 and `n_ext_not_in_limit` counts every second - expected. It is the only record of
   this: TIM-TOS cannot be polled over I2C, and UART1 is the capture's.
   Isolation: the parsers that feed it never raise in the reader thread, the
   writer never raises in the main loop, and nothing it does touches

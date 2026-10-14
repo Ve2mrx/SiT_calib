@@ -12,6 +12,20 @@ get-data.py already parses every second:
   frequency offsets and uncertainties (ppb).
 - TIM-SMEAS: per-source frequency offset / uncertainty, incl. EXTINT0.
 
+What the numbers are measured AGAINST (u-blox M8 protocol spec UBX-13003221
+R28; copy + notes in GNSS_parameters/docs/u-blox/):
+- TIM-TOS intOsc*/extOsc* describe the oscillators the LEA *disciplines*
+  (sec. 32.20.7). The SiT is not one of them - it is only measured - so
+  ext_osc_* read 0 and ext_osc_in_limit 0 permanently on timecard-mini.
+  Kept as columns so a change in that would show.
+- TIM-SMEAS sourceId 0 is the internal oscillator vs the receiver's current
+  time/frequency estimate; sourceIds 1-3 are measured AGAINST THE INTERNAL
+  OSCILLATOR: 1 = GNSS, 2 = EXTINT0 (the SiT) (sec. 32.20.4). So the SiT
+  vs GNSS is ext0 relative to gnss, not ext0 alone - which is why v2 logs
+  sourceId 1. (The daily CSV's freq_offset_ppb is the same EXTINT0 value.)
+  The sign convention of that difference is not stated in the spec - check
+  it against the daily phase-derived e before relying on it.
+
 Neither can be polled over the LEA's I2C port (TIM-TOS gets no reply,
 measured 2026-10-14), and UART1 belongs to the capture - so get-data.py is
 the only place this can be logged without disturbing anything.
@@ -40,7 +54,10 @@ import sys
 from datetime import datetime, timezone
 from time import monotonic
 
-LEA_VIEW_VERSION = 1
+# v1 2026-10-14 14:39Z: TIM-SMEAS sources 0 + 2.
+# v2 2026-10-14: + sourceId 1 (GNSS vs internal osc), appended at the end.
+# A file with another version's header is moved aside, never appended to.
+LEA_VIEW_VERSION = 2
 
 # TIM-TOS flag bits pyubx2 (1.3.4) exposes as attributes. DiscSrc: 0 internal
 # oscillator, 1 GNSS, 2 EXTINT0, 3 EXTINT1, 4 internal osc measured by host,
@@ -52,8 +69,9 @@ _TOS_FLAGS = (
 # Already scaled to ppb by pyubx2 (2^-8 ppb raw units).
 _TOS_OSC = ("intOscOffset", "intOscUncertainty", "extOscOffset", "extOscUncertainty")
 
-# TIM-SMEAS sourceId: 0 internal oscillator, 1 GNSS, 2 EXTINT0, 3 EXTINT1.
-SMEAS_SOURCES = {0: "int", 2: "ext0"}
+# TIM-SMEAS sourceId: 0 internal oscillator (vs the receiver's estimate);
+# 1 GNSS, 2 EXTINT0, 3 EXTINT1 (each vs the internal oscillator).
+SMEAS_SOURCES = {0: "int", 1: "gnss", 2: "ext0"}
 
 COLUMNS = (
     "version", "utc", "week", "tow",
@@ -70,6 +88,9 @@ COLUMNS = (
     "smeas_int_freq_valid", "smeas_int_freq_offset_ppb", "smeas_int_freq_unc_ppb",
     "smeas_ext0_freq_valid", "smeas_ext0_freq_offset_ppb", "smeas_ext0_freq_unc_ppb",
     "smeas_ext0_freq_offset_mean_ppb",
+    # v2
+    "smeas_gnss_freq_valid", "smeas_gnss_freq_offset_ppb", "smeas_gnss_freq_unc_ppb",
+    "smeas_gnss_freq_offset_mean_ppb",
 )
 
 
@@ -162,6 +183,8 @@ class LeaViewLogger:
         self._err = errstream if errstream is not None else sys.stderr
         self.errors = 0
         self.rows_written = 0
+        self.moved_aside = None
+        self._header_checked = False
         self._last_tow = None
         self._due = None
         self._reset_window()
@@ -173,6 +196,7 @@ class LeaViewLogger:
         self._n_ext_out = 0
         self._ext_offsets = []
         self._smeas_ext0 = []
+        self._smeas_gnss = []
         self._last = {}
 
     def observe(self, snap: dict) -> None:
@@ -223,6 +247,9 @@ class LeaViewLogger:
         sm = snap.get("LEA.smeas.ext0.freqOffset")
         if sm is not None:
             self._smeas_ext0.append(sm)
+        sg = snap.get("LEA.smeas.gnss.freqOffset")
+        if sg is not None:
+            self._smeas_gnss.append(sg)
         self._last = snap
 
         if now >= self._due:
@@ -263,9 +290,38 @@ class LeaViewLogger:
             _fmt(s.get("LEA.smeas.ext0.freqOffset")),
             _fmt(s.get("LEA.smeas.ext0.freqUnc")),
             _mean(self._smeas_ext0),
+            _fmt(s.get("LEA.smeas.gnss.freqValid")),
+            _fmt(s.get("LEA.smeas.gnss.freqOffset")),
+            _fmt(s.get("LEA.smeas.gnss.freqUnc")),
+            _mean(self._smeas_gnss),
         ]
 
+    def _check_header(self) -> None:
+        """
+        Once per process: if `path` starts with a different header (another
+        LEA_VIEW_VERSION), rename it to <stem>.v<N>-<UTC>.csv so rows of two
+        layouts never share a file. Rename only - nothing is deleted.
+        """
+        header = ",".join(COLUMNS)
+        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+            with open(self.path) as f:
+                first = f.readline().rstrip("\r\n")
+                second = f.readline()
+            if first != header:
+                old = second.split(",", 1)[0].strip() if second else ""
+                tag = f"v{old}" if old.isdigit() else "old"
+                stem, ext = os.path.splitext(self.path)
+                stamp = self._wallclock().strftime("%Y%m%dT%H%M%SZ")
+                target = f"{stem}.{tag}-{stamp}{ext}"
+                os.rename(self.path, target)
+                self.moved_aside = target
+                print(f"lea-view: {self.path} had another column layout, "
+                      f"moved to {target}", file=self._err)
+        self._header_checked = True
+
     def _write_row(self) -> None:
+        if not self._header_checked:
+            self._check_header()
         line = ",".join(str(v) for v in self.row())
         new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
         with open(self.path, "a") as f:

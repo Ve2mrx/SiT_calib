@@ -88,7 +88,8 @@ class TestExtract(unittest.TestCase):
         self.assertEqual(out["LEA.smeas.ext0.freqOffset"], 0.75)
         self.assertEqual(out["LEA.smeas.ext0.freqUnc"], 4.0)
         self.assertEqual(out["LEA.smeas.int.freqOffset"], -1.25)
-        self.assertNotIn("LEA.smeas.gnss.freqOffset", out)
+        self.assertEqual(out["LEA.smeas.gnss.freqValid"], 0)
+        self.assertNotIn("LEA.smeas.ext1.freqOffset", out)
 
     def test_smeas_extra_missing_source_overwrites_stale_value(self):
         data = lea_view.smeas_extra(tim_smeas([(2, 1, 0.75, 4.0)]))
@@ -128,7 +129,7 @@ class TestLogger(unittest.TestCase):
         self.assertEqual(rows[0], list(lea_view.COLUMNS))
         self.assertEqual(len(rows), 3)
         r = dict(zip(rows[0], rows[1]))
-        self.assertEqual(r["version"], "1")
+        self.assertEqual(r["version"], str(lea_view.LEA_VIEW_VERSION))
         self.assertEqual(r["utc"], "2026-10-14T12:00:00Z")
         self.assertEqual(r["n_sec"], "61")       # t=0..60 inclusive, ticks deduped
         self.assertEqual(r["discsrc_seen"], "1")
@@ -198,6 +199,34 @@ class TestLogger(unittest.TestCase):
                                      clock=self.clock, wallclock=self.wall, errstream=err)
         log.observe(None)
         self.assertEqual(log.errors, 1)
+
+    def test_gnss_source_logged_with_mean(self):
+        self.feed(61, **{"LEA.smeas.gnss.freqOffset": -0.5, "LEA.smeas.gnss.freqUnc": 2.0,
+                         "LEA.smeas.gnss.freqValid": 1})
+        r = dict(zip(*self.rows()[:2]))
+        self.assertEqual(r["smeas_gnss_freq_offset_ppb"], "-0.5")
+        self.assertEqual(r["smeas_gnss_freq_unc_ppb"], "2.0")
+        self.assertEqual(r["smeas_gnss_freq_offset_mean_ppb"], "-0.50000")
+
+    def test_old_layout_file_is_moved_aside_not_appended(self):
+        v1_header = "version,utc,week,tow"
+        with open(self.path, "w") as f:
+            f.write(v1_header + "\n1,2026-10-14T14:40:15Z,2440,312033\n")
+        err = open(os.devnull, "w")
+        self.addCleanup(err.close)
+        log = lea_view.LeaViewLogger(self.path, 60, clock=self.clock, wallclock=self.wall,
+                                     errstream=err)
+        for i in range(61):
+            log.observe(snapshot(i))
+            self.clock.t += 1
+        moved = os.path.join(self.tmp.name, "lea-view.v1-20261014T120000Z.csv")
+        self.assertEqual(log.moved_aside, moved)
+        with open(moved) as f:
+            self.assertEqual(f.read().splitlines()[0], v1_header)   # untouched
+        rows = self.rows()
+        self.assertEqual(rows[0], list(lea_view.COLUMNS))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(log.errors, 0)
 
     def test_appends_to_existing_file_without_second_header(self):
         self.feed(61)
