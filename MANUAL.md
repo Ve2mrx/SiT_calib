@@ -262,6 +262,20 @@ only verifies the mount and installs the systemd units.
   ```
 - **Mail failures**: check `~/SiT-calib_mail-failures.log` and
   `~/restart-calib_mail-failures.log` if an expected alert never arrived.
+- **Read the LEA-M8F's configuration over UART** (`lea-poll-config.py`,
+  added 2026-10-14): POLL messages only, so it cannot change the receiver,
+  but it needs `/dev/ttyS0` and refuses while `SiT-calib` runs. Stop the
+  capture away from the daily capture, run it, restart:
+  ```sh
+  screen -X -S SiT-calib quit
+  ../env/bin/python lea-poll-config.py      # -> ~/lea-config-poll-<UTC>.txt
+  ./set-calib-screen.sh                     # resumes from the state file
+  ```
+  The report includes CFG-TMODE2, i.e. the **surveyed antenna position** —
+  keep it out of git. For reading (or writing) the LEA **without** stopping
+  the capture, use `ubxcfg --i2c-bus 5` from `ublox-config-backup` ≥ 0.5.2,
+  which talks to the LEA's separate I2C/DDC port. Its replies never reach
+  the UART stream this capture parses.
 
 ## Power-loss handling
 

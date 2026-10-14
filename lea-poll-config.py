@@ -22,6 +22,11 @@ Stop the capture well away from the daily 03:06:22Z capture (midday is fine):
 
 Output: printed, and saved to ~/lea-config-poll-<UTC stamp>.txt (decoded
 messages plus raw hex), so the file can be copied to the PC for analysis.
+The report includes CFG-TMODE2 = the surveyed antenna position: never commit it.
+
+First run 2026-10-14 00:57Z confirmed the 0 us TIMEPULSE2 pulse live; that was
+fixed the same night. To read the LEA WITHOUT stopping the capture, use
+ublox-config-backup's `ubxcfg --i2c-bus 5` (>= 0.5.2) instead.
 """
 
 import os
