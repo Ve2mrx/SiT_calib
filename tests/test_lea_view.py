@@ -119,30 +119,39 @@ class TestLogger(unittest.TestCase):
                 self.log.observe(snapshot(start_tow + i, **extra))
             self.clock.t += 1.0
 
-    def rows(self):
-        with open(self.path) as f:
-            return [line.rstrip("\n").split(",") for line in f]
 
-    def test_one_row_per_minute_with_header_and_seconds_counted_once(self):
+    def lines(self):
+        with open(self.path) as f:
+            return f.read().splitlines()
+
+    def rows(self):
+        """Every line, parsed - a line that does not parse fails the test."""
+        out = []
+        for line in self.lines():
+            parsed = lea_view.parse_lea_view_line(line)
+            self.assertIsNotNone(parsed, f"unparseable line: {line[:60]}")
+            out.append(parsed)
+        return out
+
+    def test_one_line_per_minute_tagged_versioned_and_seconds_counted_once(self):
         self.feed(121)
-        rows = self.rows()
-        self.assertEqual(rows[0], list(lea_view.COLUMNS))
-        self.assertEqual(len(rows), 3)
-        r = dict(zip(rows[0], rows[1]))
-        self.assertEqual(r["version"], str(lea_view.LEA_VIEW_VERSION))
-        self.assertEqual(r["utc"], "2026-10-14T12:00:00Z")
+        lines = self.lines()
+        self.assertEqual(len(lines), 2)                       # no header
+        self.assertTrue(lines[0].startswith("LEAVIEW,2,2026-10-14T12:00:00+00:00,"))
+        ts, version, r = self.rows()[0]
+        self.assertEqual(version, lea_view.LEA_VIEW_LINE_VERSION)
+        self.assertEqual(ts, datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc))
         self.assertEqual(r["n_sec"], "61")       # t=0..60 inclusive, ticks deduped
         self.assertEqual(r["discsrc_seen"], "1")
         self.assertEqual(r["n_not_gnss"], "0")
         self.assertEqual(r["ext_osc_offset_mean_ppb"], "2.00000")
         self.assertEqual(r["smeas_ext0_freq_unc_ppb"], "3.0")
-        self.assertEqual(len(rows[1]), len(lea_view.COLUMNS))
 
     def test_discsrc_excursion_inside_a_minute_is_counted(self):
         self.feed(30)
         self.feed(3, start_tow=130, **{"LEA.tos.DiscSrc": 0, "LEA.tos.extOscInLimit": 0})
         self.feed(30, start_tow=133)
-        r = dict(zip(*self.rows()[:2]))
+        r = self.rows()[0][2]
         self.assertEqual(r["discsrc_seen"], "0|1")
         self.assertEqual(r["n_not_gnss"], "3")
         self.assertEqual(r["n_ext_not_in_limit"], "3")
@@ -158,7 +167,7 @@ class TestLogger(unittest.TestCase):
         for i in range(61):
             self.log.observe({"TIM_TOS.data_valid": True, "TIM-TOS.TOW": i})
             self.clock.t += 1
-        r = dict(zip(*self.rows()[:2]))
+        r = self.rows()[0][2]
         self.assertEqual(r["discsrc_seen"], "?")
         self.assertEqual(r["ext_osc_offset_ppb"], "")
         self.assertEqual(self.log.errors, 0)
@@ -203,40 +212,140 @@ class TestLogger(unittest.TestCase):
     def test_gnss_source_logged_with_mean(self):
         self.feed(61, **{"LEA.smeas.gnss.freqOffset": -0.5, "LEA.smeas.gnss.freqUnc": 2.0,
                          "LEA.smeas.gnss.freqValid": 1})
-        r = dict(zip(*self.rows()[:2]))
+        r = self.rows()[0][2]
         self.assertEqual(r["smeas_gnss_freq_offset_ppb"], "-0.5")
         self.assertEqual(r["smeas_gnss_freq_unc_ppb"], "2.0")
         self.assertEqual(r["smeas_gnss_freq_offset_mean_ppb"], "-0.50000")
 
-    def test_old_layout_file_is_moved_aside_not_appended(self):
-        v1_header = "version,utc,week,tow"
+    def test_appends_across_restarts_and_versions_share_one_file(self):
+        # A v1 line already in the file (as after a version bump): kept, and
+        # new lines are appended after it - the sit-health.csv convention.
+        v1 = "LEAVIEW,1,2026-10-14T11:00:00+00:00," + ",".join(
+            "" for _ in lea_view.LEA_VIEW_FIELDS_V1)
         with open(self.path, "w") as f:
-            f.write(v1_header + "\n1,2026-10-14T14:40:15Z,2440,312033\n")
-        err = open(os.devnull, "w")
-        self.addCleanup(err.close)
-        log = lea_view.LeaViewLogger(self.path, 60, clock=self.clock, wallclock=self.wall,
-                                     errstream=err)
-        for i in range(61):
-            log.observe(snapshot(i))
-            self.clock.t += 1
-        moved = os.path.join(self.tmp.name, "lea-view.v1-20261014T120000Z.csv")
-        self.assertEqual(log.moved_aside, moved)
-        with open(moved) as f:
-            self.assertEqual(f.read().splitlines()[0], v1_header)   # untouched
-        rows = self.rows()
-        self.assertEqual(rows[0], list(lea_view.COLUMNS))
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(log.errors, 0)
-
-    def test_appends_to_existing_file_without_second_header(self):
+            f.write(v1 + "\n")
         self.feed(61)
         log2 = lea_view.LeaViewLogger(self.path, 60, clock=self.clock, wallclock=self.wall)
         for i in range(61):
             log2.observe(snapshot(1000 + i))
             self.clock.t += 1
-        rows = self.rows()
-        self.assertEqual(sum(1 for r in rows if r[0] == "version"), 1)
-        self.assertEqual(len(rows), 3)
+        self.assertEqual([v for _, v, _ in self.rows()], [1, 2, 2])
+        self.assertEqual(os.listdir(self.tmp.name), ["lea-view.csv"])   # nothing renamed
+
+
+class TestParse(unittest.TestCase):
+    def test_rejects_wrong_tag_version_count_or_timestamp(self):
+        good = "LEAVIEW,2,2026-10-14T12:00:00+00:00," + ",".join(
+            "x" for _ in lea_view.LEA_VIEW_FIELDS_V2)
+        self.assertIsNotNone(lea_view.parse_lea_view_line(good))
+        self.assertIsNotNone(lea_view.parse_lea_view_line(good + "\r\n"))
+        for bad in (good.replace("LEAVIEW", "HEALTH", 1),
+                    good.replace(",2,", ",9,", 1),
+                    good + ",extra",
+                    good.replace("2026-10-14T12:00:00+00:00", "yesterday"),
+                    "", "LEAVIEW"):
+            self.assertIsNone(lea_view.parse_lea_view_line(bad), bad[:40])
+
+    def test_field_lists_are_append_only(self):
+        v1, v2 = lea_view.LEA_VIEW_FIELDS_V1, lea_view.LEA_VIEW_FIELDS_V2
+        self.assertEqual(v2[:len(v1)], v1)
+        self.assertEqual(lea_view.LEA_VIEW_FIELDS[lea_view.LEA_VIEW_LINE_VERSION], v2)
+
+
+def _read(path):
+    with open(path) as f:
+        return f.read()
+
+
+def _load_migrate():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "migrate-lea-view.py")
+    spec = importlib.util.spec_from_file_location("migrate_lea_view", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestMigrate(unittest.TestCase):
+    """The 2026-10-14 one-off conversion of the headed files to LEAVIEW lines."""
+
+    def setUp(self):
+        self.m = _load_migrate()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.m.ARCHIVE_DIR = os.path.join(self.tmp.name, "SiT-calib_archive")
+        self.main = os.path.join(self.tmp.name, "lea-view.csv")
+        self.aside = os.path.join(self.tmp.name, "lea-view.v1-20261014T145858Z.csv")
+        n1, n2 = len(lea_view.LEA_VIEW_FIELDS_V1), len(lea_view.LEA_VIEW_FIELDS_V2)
+        self.v1_rows = [f"1,2026-10-14T14:{m}:15Z," + ",".join(str(i) for i in range(n1))
+                        for m in (40, 41)]
+        self.v2_rows = [f"2,2026-10-14T14:{m}:58Z," + ",".join(str(i) for i in range(n2))
+                        for m in (58, 59)]
+        self.tagged = ("LEAVIEW,2,2026-10-14T15:30:00.123456+00:00,"
+                       + ",".join(str(i) for i in range(n2)))
+        with open(self.aside, "w") as f:
+            f.write(self.m.LEGACY_HEADERS[1] + "\n" + "\n".join(self.v1_rows) + "\n")
+        with open(self.main, "w") as f:
+            f.write(self.m.LEGACY_HEADERS[2] + "\n" + "\n".join(self.v2_rows) + "\n"
+                    + self.tagged + "\n")
+
+    def run_main(self, *args):
+        out = open(os.devnull, "w")
+        self.addCleanup(out.close)
+        stdout, sys.stdout = sys.stdout, out
+        try:
+            return self.m.main(["--file", self.main, "--no-wait", *args])
+        finally:
+            sys.stdout = stdout
+
+    def test_dry_run_changes_nothing(self):
+        before = _read(self.main)
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(_read(self.main), before)
+        self.assertTrue(os.path.exists(self.aside))
+
+    def test_commit_merges_in_time_order_and_archives_originals(self):
+        main_before, aside_before = _read(self.main), _read(self.aside)
+        self.assertEqual(self.run_main("--commit"), 0)
+        lines = _read(self.main).splitlines()
+        self.assertEqual(len(lines), 5)
+        parsed = [lea_view.parse_lea_view_line(l) for l in lines]
+        self.assertTrue(all(parsed))
+        self.assertEqual([p[1] for p in parsed], [1, 1, 2, 2, 2])
+        self.assertEqual([p[0] for p in parsed], sorted(p[0] for p in parsed))
+        self.assertEqual(lines[0].split(",")[2], "2026-10-14T14:40:15+00:00")
+        self.assertEqual(lines[-1], self.tagged)               # kept byte-for-byte
+        # originals archived unchanged, under <stem>_<stamp>.csv; nothing left beside
+        arch = sorted(os.listdir(self.m.ARCHIVE_DIR))
+        self.assertEqual(len(arch), 2)
+        self.assertTrue(arch[0].startswith("lea-view-pre-tag_"))
+        self.assertTrue(arch[1].startswith("lea-view-v1-pre-tag_"))
+        self.assertEqual(_read(os.path.join(self.m.ARCHIVE_DIR, arch[0])), main_before)
+        self.assertEqual(_read(os.path.join(self.m.ARCHIVE_DIR, arch[1])), aside_before)
+        self.assertFalse(os.path.exists(self.aside))
+
+    def test_second_run_is_a_no_op_on_content(self):
+        self.run_main("--commit")
+        after_first = _read(self.main)
+        import time as _t
+        _t.sleep(1.1)                                          # new archive stamp
+        self.assertEqual(self.run_main("--commit"), 0)
+        self.assertEqual(_read(self.main), after_first)
+
+    def test_unknown_line_refuses_and_writes_nothing(self):
+        with open(self.main, "a") as f:
+            f.write("garbage,line\n")
+        before = _read(self.main)
+        with self.assertRaises(self.m.MigrationError):
+            self.run_main("--commit")
+        self.assertEqual(_read(self.main), before)
+        self.assertFalse(os.path.exists(self.m.ARCHIVE_DIR))
+
+    def test_wrong_field_count_refuses(self):
+        with open(self.main, "a") as f:
+            f.write("2,2026-10-14T15:00:00Z,1,2,3\n")
+        with self.assertRaises(self.m.MigrationError):
+            self.run_main("--commit")
 
 
 if __name__ == "__main__":

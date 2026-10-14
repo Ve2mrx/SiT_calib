@@ -45,8 +45,17 @@ Hard rule: this must never affect the daily capture. Hence:
   parse_sit are untouched.
 - It is opt-in: get-data.py only builds a logger when --lea-view is given.
 
-Output: one CSV row per ~60 s of TIM-TOS seconds (header written when the
-file is new or empty). Bump LEA_VIEW_VERSION when the column list changes.
+Output: one LEAVIEW,<version>,<UTC ISO timestamp>,... line per ~60 s of
+TIM-TOS seconds, appended forever to one file - the same convention as
+SiT5721's ~/sit-health.csv (HEALTH,<version>,...) and parse_sit.py's
+CSV,<version>,... records: no header, every line carries its own version,
+lines of different versions may share the file, and readers dispatch per
+line (parse_lea_view_line()). Field lists are append-only.
+
+Like sit-health.csv - and unlike the calibration log - this file is
+continuous telemetry: it is NOT rotated into ~/SiT-calib_archive/ at a
+re-tune or a power loss. A power loss is exactly when its record has to be
+unbroken (the retrace curve).
 """
 
 import os
@@ -54,10 +63,12 @@ import sys
 from datetime import datetime, timezone
 from time import monotonic
 
-# v1 2026-10-14 14:39Z: TIM-SMEAS sources 0 + 2.
-# v2 2026-10-14: + sourceId 1 (GNSS vs internal osc), appended at the end.
-# A file with another version's header is moved aside, never appended to.
-LEA_VIEW_VERSION = 2
+LINE_TAG = "LEAVIEW"
+
+# Bump when the LEAVIEW,<version>,... field list changes, and add a
+# LEA_VIEW_FIELDS_V<N> - same convention as HEALTH_LINE_VERSION /
+# HEALTH_CSV_FIELDS_V<N> in SiT5721's save-SiT5721.py.
+LEA_VIEW_LINE_VERSION = 2
 
 # TIM-TOS flag bits pyubx2 (1.3.4) exposes as attributes. DiscSrc: 0 internal
 # oscillator, 1 GNSS, 2 EXTINT0, 3 EXTINT1, 4 internal osc measured by host,
@@ -73,12 +84,15 @@ _TOS_OSC = ("intOscOffset", "intOscUncertainty", "extOscOffset", "extOscUncertai
 # 1 GNSS, 2 EXTINT0, 3 EXTINT1 (each vs the internal oscillator).
 SMEAS_SOURCES = {0: "int", 1: "gnss", 2: "ext0"}
 
-COLUMNS = (
-    "version", "utc", "week", "tow",
-    "n_sec",                 # TIM-TOS seconds seen in this row's window
+# Field order for a LEAVIEW,1,... line, timestamp excluded (it is the third
+# field, handled separately in parse_lea_view_line()). v1 ran 2026-10-14
+# 14:40Z-14:57Z: TIM-SMEAS sources 0 + 2 only.
+LEA_VIEW_FIELDS_V1 = [
+    "week", "tow",
+    "n_sec",                 # TIM-TOS seconds seen in this line's window
     "discsrc_seen",          # distinct DiscSrc values in the window, e.g. "1" or "0|1"
     "n_not_gnss",            # seconds with DiscSrc != 1
-    "n_ext_not_in_limit",    # seconds with extOscInLimit == 0
+    "n_ext_not_in_limit",    # seconds with extOscInLimit == 0 (all of them, here)
     "discsrc", "gnss_time_valid", "utc_time_valid", "time_in_limit",
     "int_osc_in_limit", "ext_osc_in_limit", "locked_pulse",
     "gnss_unc_ns",
@@ -88,10 +102,41 @@ COLUMNS = (
     "smeas_int_freq_valid", "smeas_int_freq_offset_ppb", "smeas_int_freq_unc_ppb",
     "smeas_ext0_freq_valid", "smeas_ext0_freq_offset_ppb", "smeas_ext0_freq_unc_ppb",
     "smeas_ext0_freq_offset_mean_ppb",
-    # v2
+]
+
+# v2 (2026-10-14 14:58Z) = v1 + TIM-SMEAS sourceId 1 (GNSS vs internal osc),
+# without which the SiT vs GNSS cannot be reconstructed. Append-only.
+LEA_VIEW_FIELDS_V2 = LEA_VIEW_FIELDS_V1 + [
     "smeas_gnss_freq_valid", "smeas_gnss_freq_offset_ppb", "smeas_gnss_freq_unc_ppb",
     "smeas_gnss_freq_offset_mean_ppb",
-)
+]
+
+LEA_VIEW_FIELDS = {1: LEA_VIEW_FIELDS_V1, 2: LEA_VIEW_FIELDS_V2}
+
+
+def parse_lea_view_line(line: str):
+    """
+    Parses one LEAVIEW,<version>,<iso>,... line. No field can contain a
+    comma ("|" separates discsrc_seen), so a plain split is safe.
+
+    :return tuple[datetime, int, dict] | None: (UTC timestamp, version,
+        {field: str}) - values stay strings; empty means "not available".
+        None for anything that is not a recognized, well-formed LEAVIEW line
+        (unknown version, wrong field count, bad timestamp) - skipped, never
+        raised, so one bad line cannot lose the rest of the file.
+    """
+    parts = line.rstrip("\r\n").split(",")
+    if len(parts) < 3 or parts[0] != LINE_TAG:
+        return None
+    try:
+        version = int(parts[1])
+        ts = datetime.fromisoformat(parts[2])
+    except ValueError:
+        return None
+    fields = LEA_VIEW_FIELDS.get(version)
+    if fields is None or len(parts) != 3 + len(fields):
+        return None
+    return ts, version, dict(zip(fields, parts[3:]))
 
 
 def tos_extra(parsed) -> dict:
@@ -183,8 +228,6 @@ class LeaViewLogger:
         self._err = errstream if errstream is not None else sys.stderr
         self.errors = 0
         self.rows_written = 0
-        self.moved_aside = None
-        self._header_checked = False
         self._last_tow = None
         self._due = None
         self._reset_window()
@@ -262,12 +305,14 @@ class LeaViewLogger:
                 self._reset_window()
 
     def row(self) -> list:
+        """The LEAVIEW line, tag first; field order = LEA_VIEW_FIELDS_V<N>."""
         s = self._last
         seen = "|".join(str(d) if d is not None else "?" for d in
                         sorted(self._disc_seen, key=lambda d: (d is None, d)))
         return [
-            LEA_VIEW_VERSION,
-            self._wallclock().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            LINE_TAG, LEA_VIEW_LINE_VERSION,
+            # isoformat() with +00:00, like sit-health.csv's HEALTH lines
+            self._wallclock().isoformat(),
             _fmt(s.get("TIM-TOS.week")), _fmt(s.get("TIM-TOS.TOW")),
             self._n, seen, self._n_not_gnss, self._n_ext_out,
             _fmt(s.get("LEA.tos.DiscSrc")),
@@ -296,36 +341,8 @@ class LeaViewLogger:
             _mean(self._smeas_gnss),
         ]
 
-    def _check_header(self) -> None:
-        """
-        Once per process: if `path` starts with a different header (another
-        LEA_VIEW_VERSION), rename it to <stem>.v<N>-<UTC>.csv so rows of two
-        layouts never share a file. Rename only - nothing is deleted.
-        """
-        header = ",".join(COLUMNS)
-        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
-            with open(self.path) as f:
-                first = f.readline().rstrip("\r\n")
-                second = f.readline()
-            if first != header:
-                old = second.split(",", 1)[0].strip() if second else ""
-                tag = f"v{old}" if old.isdigit() else "old"
-                stem, ext = os.path.splitext(self.path)
-                stamp = self._wallclock().strftime("%Y%m%dT%H%M%SZ")
-                target = f"{stem}.{tag}-{stamp}{ext}"
-                os.rename(self.path, target)
-                self.moved_aside = target
-                print(f"lea-view: {self.path} had another column layout, "
-                      f"moved to {target}", file=self._err)
-        self._header_checked = True
-
     def _write_row(self) -> None:
-        if not self._header_checked:
-            self._check_header()
         line = ",".join(str(v) for v in self.row())
-        new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
         with open(self.path, "a") as f:
-            if new:
-                f.write(",".join(COLUMNS) + "\n")
             f.write(line + "\n")
         self.rows_written += 1
