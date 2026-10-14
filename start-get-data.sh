@@ -85,7 +85,9 @@ else
 	WaitforTow=$1
 fi
 echo
-args=(-F True -i "$INTERVAL" -P "/dev/ttyS0" -O ~/SiT-calib_output.txt -S "$STATEFILE")
+# --lea-view (TODO B8, 2026-10-14): the LEA's per-minute view of its frequency
+# sources, to its own file; see lea_view.py. Remove it to turn the log off.
+args=(-F True -i "$INTERVAL" -P "/dev/ttyS0" -O ~/SiT-calib_output.txt -S "$STATEFILE" --lea-view ~/lea-view.csv)
 if [ -n "$WaitforTow" ]; then
 	args+=(-W "$WaitforTow")
 fi

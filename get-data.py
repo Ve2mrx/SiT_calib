@@ -20,6 +20,11 @@ error) and CM4 SoC temp, since the SiT "good, stabilized" status is
 oscillator-side only and does not reveal e.g. a drifting thermal control
 loop. See build_csv_line() and parse_sit.py's module docstring.
 
+With --lea-view FILE (2026-10-14), the LEA's own view of its frequency
+sources (TIM-TOS DiscSrc/flags/oscillator offsets, TIM-SMEAS EXTINT0) is
+also appended to FILE about once a minute - see lea_view.py. It reads the
+same snapshot and never affects the capture.
+
 Run with -h for the full list of command-line options.
 
 Originally forked from pygnssutils' gnssapp.py skeleton (GNSSSkeletonApp);
@@ -85,6 +90,7 @@ from pyubx2 import (
 from mbt_SiT5721_lib import SiT5721
 import smbus
 import parse_sit
+import lea_view
 
 from datetime import datetime, timedelta, time, date, timezone
 import json
@@ -237,6 +243,8 @@ class GNSSSkeletonApp:
                                 elif parsed_data.identity == "TIM-SMEAS":
                                     data = get_ubx_TIM_SMEAS_data(
                                         parsed_data, data)
+                                    # --lea-view only; never raises (see lea_view.py)
+                                    data.update(lea_view.smeas_extra(parsed_data))
 
                                     nty = f", iTOW={data['TIM-SMEAS.iTOW']}, source={data['TIM-SMEAS.source']}, freqValid={data['TIM-SMEAS.freqValid']}, phaseValid={data['TIM-SMEAS.phaseValid']}, PhaseOffset={data['TIM-SMEAS.phaseOffset']}, PhaseUnc={data['TIM-SMEAS.phaseUnc']}, freqOffset={data['TIM-SMEAS.freqOffset']}, freqUnc={data['TIM-SMEAS.freqUnc']}"
 
@@ -519,6 +527,11 @@ def get_ubx_TIM_TOS_data(parsed_data: object, data: dict):
     # this reflects the *reference*'s quality, not the oscillator's. Always
     # present when this function runs (TIM-TOS is strictly gated).
     data['TIM-TOS.gnssUncertainty'] = int(parsed_data.gnssUncertainty)
+
+    # LEA.tos.* (DiscSrc, in-limit flags, int/ext oscillator offsets) for the
+    # --lea-view log only (TODO B8). tos_extra() never raises - this runs in
+    # the reader thread, where an exception stops the capture.
+    data.update(lea_view.tos_extra(parsed_data))
 
     data['TIM_TOS.data_valid'] = True
 
@@ -1106,6 +1119,16 @@ if __name__ == "__main__":
         type=str
     )
 
+    arp.add_argument(
+        "--lea-view",
+        required=False,
+        help="Also append the LEA's view of its frequency sources (TIM-TOS "
+             "DiscSrc/flags/osc offsets, TIM-SMEAS EXTINT0) to this CSV, "
+             "about once a minute (str). Separate file; never affects the capture.",
+        default=False,
+        type=str
+    )
+
     args = arp.parse_args()
     send_queue = Queue()
     stop_event = Event()
@@ -1139,6 +1162,11 @@ if __name__ == "__main__":
     TOW_next = TOW_selected
     weeks_crossed = 0
 
+    # Opt-in (TODO B8). Reads the same snapshot as the capture, writes only
+    # its own file, and observe() never raises.
+    lea_view_logger = lea_view.LeaViewLogger(
+        os.path.expanduser(args.lea_view)) if args.lea_view else None
+
     try:
         print(f"Starting GNSS reader/writer... (get-data.py v{__version__})\n")
         print(f"args= {args}")
@@ -1163,6 +1191,9 @@ if __name__ == "__main__":
 
                 with data_lock:
                     snapshot = dict(data)
+
+                if lea_view_logger is not None:
+                    lea_view_logger.observe(snapshot)
 
                 # One-shot, not a retry loop: give the receiver a grace
                 # period to prove each required message is already flowing
